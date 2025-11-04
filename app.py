@@ -170,10 +170,9 @@ if menu == "📈 Tren Nasional":
 
 # ============================================================
 # 6. PREDIKSI PROVINSI (dengan selector provinsi + default median per provinsi)
-# ============================================================
-# ===================== GANTI BLOK "🔮 Prediksi Provinsi" DENGAN INI =====================
+# ===================== BLOK "🔮 Prediksi Provinsi" (PERBAIKAN: TIDAK HILANG INDIKATOR) =====================
 elif menu == "🔮 Prediksi Akses Air Bersih per Provinsi":
-    st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
+    st.header("🔮 Prediksi Akses Air Bersih per Provinsi (fix indikator hilang)")
 
     model_path = "model.pkl"
     scaler_path = "scaler.pkl"
@@ -185,62 +184,80 @@ elif menu == "🔮 Prediksi Akses Air Bersih per Provinsi":
         model = joblib.load(model_path)
         scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
 
-        # ================= helper normalizer =================
         def norm_name(s: str):
             return str(s).strip().lower().replace(" ", "_")
 
-        # === detect provinsi column (manual_prov from sidebar if present) ===
+        # deteksi provinsi column (manual_prov jika ada)
         prov_candidates = ["provinsi", "province", "nama_provinsi", "kabupaten_provinsi", "region"]
-        prov_col = None
-        if 'manual_prov' in locals() and manual_prov:
-            prov_col = manual_prov
-        else:
-            prov_col = find_best_column(df.columns.tolist(), prov_candidates)
+        prov_col = manual_prov if ('manual_prov' in locals() and manual_prov) else find_best_column(df.columns.tolist(), prov_candidates)
 
         if prov_col:
-            # temporary cleaned prov columns for robust matching
             df['_prov__clean'] = df[prov_col].astype(str).str.strip()
             df['_prov__clean_lower'] = df['_prov__clean'].str.lower()
             unique_prov = sorted(df['_prov__clean'].dropna().unique().tolist())
         else:
             unique_prov = []
 
-        # === Determine expected features (exact names & order) ===
+        # 1) Dapatkan expected_features dari model/scaler/features.json (tanpa langsung memaksa ini jadi widget)
         expected_features = None
-        # Prefer model.feature_names_in_ if available (these are exact names used at fit time)
         if hasattr(model, "feature_names_in_"):
             expected_features = list(model.feature_names_in_)
-            st.info("Menggunakan fitur yang model harapkan (feature_names_in_).")
-        # else use features.json raw (without normalizing) if exists
+            st.info("Menggunakan feature_names_in_ dari model.")
         elif os.path.exists(features_path):
-            with open(features_path, "r") as f:
-                try:
+            try:
+                with open(features_path, "r") as f:
                     expected_features = json.load(f)
-                    st.info("Menggunakan daftar fitur dari features.json.")
-                except Exception:
-                    expected_features = None
-        # else try scaler.feature_names_in_
+                    st.info("Menggunakan fitur dari features.json.")
+            except Exception:
+                expected_features = None
         elif scaler is not None and hasattr(scaler, "feature_names_in_"):
             expected_features = list(scaler.feature_names_in_)
-            st.info("Menggunakan fitur yang scaler harapkan (feature_names_in_).")
-        # fallback: numeric columns of dataframe
-        if not expected_features or len(expected_features) == 0:
+            st.info("Menggunakan feature_names_in_ dari scaler.")
+        # fallback ke kolom numerik DF
+        if not expected_features:
             expected_features = df.select_dtypes(include='number').columns.tolist()
-            st.info("Fallback: menggunakan kolom numerik dataset sebagai fitur.")
+            st.info("Fallback ke kolom numerik dataset sebagai expected_features.")
 
-        # create a normalized mapping for expected_features -> normalized key
-        expected_norm_map = {feat: norm_name(feat) for feat in expected_features}
+        st.write("DEBUG: expected_features (what model expects):", expected_features[:20], " ... (total {})".format(len(expected_features)))
 
-        # create normalized map for df columns
+        # 2) Coba match expected_features ke kolom dataset (normalize vs original)
+        # buat peta normalized df cols -> original df col name
         df_cols_norm_map = {col: norm_name(col) for col in df.columns.tolist()}
+        norm_to_dfcol = {v: k for k, v in df_cols_norm_map.items()}
 
-        # build reverse map: normalized_name -> original df col
-        norm_to_dfcol = {}
-        for col, n in df_cols_norm_map.items():
-            norm_to_dfcol.setdefault(n, col)
+        matched_map = {}         # expected_feature -> matched_df_col (or None)
+        widget_features = []     # list of expected_feature names that we will render (preserve model feature key)
 
-        # =========== UI: provinsi selector ===========
-        st.markdown("Masukkan data indikator atau pilih provinsi untuk mengisi otomatis:")
+        for feat in expected_features:
+            norm_feat = norm_name(feat)
+            matched = None
+            # direct normalized match
+            if norm_feat in norm_to_dfcol:
+                matched = norm_to_dfcol[norm_feat]
+            else:
+                # fuzzy match against normalized df column names
+                df_norm_list = list(df_cols_norm_map.values())
+                close = difflib.get_close_matches(norm_feat, df_norm_list, n=1, cutoff=0.7)
+                if close:
+                    matched = norm_to_dfcol[close[0]]
+            matched_map[feat] = matched
+            # if matched is not None, we can use this expected feature as widget, otherwise postpone
+            if matched:
+                widget_features.append(feat)
+
+        # If after matching we got NO widget_features, fallback to df numeric columns
+        if not widget_features:
+            st.warning("Tidak dapat mencocokkan expected_features ke kolom dataset. Menggunakan kolom numerik dataset sebagai indikator.")
+            numeric_cols = df.select_dtypes(include='number').columns.tolist()
+            # Set widget_features to be those column names (we'll use them as both expected key and label)
+            widget_features = numeric_cols
+            # Rebuild matched_map for these numeric columns (key = col, matched = col)
+            matched_map = {col: col for col in numeric_cols}
+            expected_features = numeric_cols  # override expected_features for downstream building
+
+        st.write("DEBUG: widget_features (akan ditampilkan):", widget_features[:20], " ... (total {})".format(len(widget_features)))
+
+        # UI: pilih provinsi
         if prov_col and unique_prov:
             sel_prov_raw = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
             sel_prov = None if sel_prov_raw == "-- Pilih --" else sel_prov_raw
@@ -248,110 +265,105 @@ elif menu == "🔮 Prediksi Akses Air Bersih per Provinsi":
             sel_prov = None
             st.info("Kolom provinsi tidak ditemukan di dataset — nilai default per provinsi tidak tersedia.")
 
-        # =========== compute medians (global & per-prov) ===========
+        # Hitung median global dan per-prov untuk setiap matched feature
         global_medians = {}
         prov_medians = {}
-        # For matching: we will try to match expected feature -> df column using normalized names:
-        for feat in expected_features:
-            norm_feat = expected_norm_map[feat]
-            matched_df_col = None
-            # direct normalized match
-            if norm_feat in norm_to_dfcol:
-                matched_df_col = norm_to_dfcol[norm_feat]
-            else:
-                # try fuzzy match against df normalized column names
-                df_norm_list = list(df_cols_norm_map.values())
-                close = difflib.get_close_matches(norm_feat, df_norm_list, n=1, cutoff=0.7)
-                if close:
-                    # retrieve original df column by normalized name
-                    matched_df_col = norm_to_dfcol[close[0]]
-            if matched_df_col:
-                # compute medians
-                global_medians[feat] = pd.to_numeric(df[matched_df_col], errors="coerce").median(skipna=True)
+        for feat in widget_features:
+            dfcol = matched_map.get(feat) if matched_map.get(feat) else feat
+            if dfcol in df.columns:
+                global_medians[feat] = pd.to_numeric(df[dfcol], errors="coerce").median(skipna=True)
                 if sel_prov is not None:
                     mask = df['_prov__clean_lower'] == str(sel_prov).strip().lower()
-                    ser = pd.to_numeric(df.loc[mask, matched_df_col], errors="coerce")
+                    ser = pd.to_numeric(df.loc[mask, dfcol], errors="coerce")
                     prov_medians[feat] = ser.median(skipna=True) if not ser.empty else None
                 else:
                     prov_medians[feat] = None
             else:
-                # no matching column in dataset -> fill None so we can fallback later
                 global_medians[feat] = None
                 prov_medians[feat] = None
 
-        # =========== allow manual edits? ===========
         allow_manual = st.checkbox("Izinkan edit manual nilai indikator setelah autofill", value=False)
         st.write("Nilai input akan diisi otomatis dari median provinsi (jika ada).")
 
-        # Prepare a dict of values in the same key names as expected_features
-        # But we'll show the inputs with friendly labels: use normalized short labels
-        input_values_for_expected = {}
-
-        for feat in expected_features:
-            # choose default: prov_median -> global_median -> 0.0
-            val = None
+        # Render inputs. Use widget_features list (these keys are either expected feature names or df numeric col names)
+        inputs_for_prediction = {}
+        for feat in widget_features:
+            default_val = 0.0
             if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
-                val = float(prov_medians[feat])
+                default_val = float(prov_medians[feat])
             elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
-                val = float(global_medians[feat])
+                default_val = float(global_medians[feat])
             else:
-                val = 0.0
+                default_val = 0.0
 
-            # disabled if prov selected and manual not allowed
             disabled_flag = (sel_prov is not None) and (not allow_manual)
-
-            # Show widget keyed by expected feature name to keep consistent state
-            widget_key = f"pred_auto_{feat}"
+            keyname = f"pred_{feat}"
             try:
-                input_val = st.number_input(label=f"{feat}", value=val, step=0.01, format="%f", key=widget_key, disabled=disabled_flag)
+                inputs_for_prediction[feat] = st.number_input(label=f"{feat}", value=default_val, step=0.01, format="%f", key=keyname, disabled=disabled_flag)
             except TypeError:
-                # fallback if streamlit version doesn't accept disabled
-                input_val = st.number_input(label=f"{feat} (default: {val})", value=val, step=0.01, format="%f", key=widget_key)
-            input_values_for_expected[feat] = input_val
+                inputs_for_prediction[feat] = st.number_input(label=f"{feat} (default: {default_val})", value=default_val, step=0.01, format="%f", key=keyname)
 
         if sel_prov:
             st.caption(f"Default diisi dengan median provinsi: {sel_prov}. (Centang 'Izinkan edit manual' untuk mengubah nilai.)")
         else:
             st.caption("Tidak ada provinsi dipilih — nilai default memakai median global atau 0.0.")
 
-        # =========== PREDICT: build DataFrame with exact expected_features order ===========
+        # Prediksi: butuh membangun X_input yang sesuai expected_features order & names.
         if st.button("Prediksi"):
-            # Build input dataframe with columns exactly expected_features and in same order
-            X_input = pd.DataFrame([{feat: input_values_for_expected.get(feat, 0.0) for feat in expected_features}])
+            # Build final expected_features list to use for model input:
+            # If we still have model.feature_names_in_ originally (and matched_map had matches), keep that.
+            final_expected = expected_features
 
-            # Ensure numeric dtype
-            X_input = X_input.astype(float)
+            # Create dict values for final_expected: if we have an input for that feat use it, else fallback 0
+            final_input_dict = {}
+            for feat in final_expected:
+                if feat in inputs_for_prediction:
+                    final_input_dict[feat] = inputs_for_prediction[feat]
+                else:
+                    # try to find by matched_map reverse: maybe expected feature maps to dfcol which we have
+                    mapped_col = matched_map.get(feat)
+                    if mapped_col and mapped_col in inputs_for_prediction:
+                        final_input_dict[feat] = inputs_for_prediction[mapped_col]
+                    else:
+                        # fallback: try normalized name match with inputs_for_prediction keys
+                        normf = norm_name(feat)
+                        found = None
+                        for k in inputs_for_prediction.keys():
+                            if norm_name(k) == normf:
+                                found = inputs_for_prediction[k]
+                                break
+                        final_input_dict[feat] = found if found is not None else 0.0
 
-            # If scaler expects specific feature names (has feature_names_in_), try to preserve those names
-            # (we already used expected_features from model or features.json)
+            X_input = pd.DataFrame([final_input_dict], columns=final_expected)
+
+            # Ensure types numeric
+            X_input = X_input.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+            # Apply scaler if available
             try:
                 if scaler is not None:
-                    # Some scalers/transformers check feature names; passing X_input with correct columns avoids mismatch
                     X_scaled = scaler.transform(X_input)
                 else:
                     X_scaled = X_input.values
             except Exception as e:
                 st.error(f"Gagal mengaplikasikan scaler: {e}")
-                # As fallback, try using numpy array (order should match expected_features)
-                try:
-                    X_scaled = X_input.values
-                except Exception as e2:
-                    st.error(f"Fallback gagal: {e2}")
-                    X_scaled = None
+                # fallback to values
+                X_scaled = X_input.values
 
-            if X_scaled is not None:
-                try:
-                    # If model expects a dataframe with named columns, some models accept array too.
-                    pred = model.predict(X_scaled)[0]
-                    st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
-                    if sel_prov:
-                        st.write(f"Provinsi: **{sel_prov}**")
-                except Exception as e:
-                    st.error(f"Terjadi error saat prediksi: {e}")
-        # Clean up temporary cols
+            # Predict
+            try:
+                pred = model.predict(X_scaled)[0]
+                st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
+                if sel_prov:
+                    st.write(f"Provinsi: **{sel_prov}**")
+            except Exception as e:
+                st.error(f"Terjadi error saat prediksi: {e}")
+
+        # cleanup temp cols
         if '_prov__clean' in df.columns:
             df.drop(columns=[c for c in ['_prov__clean', '_prov__clean_lower'] if c in df.columns], inplace=True)
 # ========================================================================================
+
 
 
 # ============================================================
