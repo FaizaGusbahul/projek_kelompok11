@@ -76,11 +76,6 @@ num_cols = df.select_dtypes(include='number').columns
 for col in num_cols:
     df[col] = df[col].fillna(df[col].median())
 
-# Show diagnostic info to user (very important to see what columns exist)
-st.subheader("🔎 Informasi Kolom (diagnostik)")
-st.write("Nama kolom setelah normalisasi:", df.columns.tolist())
-st.write("Contoh 5 baris pertama:")
-st.dataframe(df.head())
 
 # ============================================================
 # helpers: auto-detect columns (fuzzy) and cleaning numeric strings
