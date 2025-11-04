@@ -26,7 +26,7 @@ Kamu dapat mengunggah dataset baru atau menggunakan dataset bawaan untuk:
 # ============================================================
 st.sidebar.header("📂 Pilih Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload dataset CSV kamu", type=["csv"])
-default_path = "DATA_WATER_SUPPLY_STATISTICS.csv"
+default_path = "TUGAS_DATA_KELOMPOK11/DATA_WATER_SUPPLY_STATISTICS.csv"
 
 # try reading CSV with a couple fallback options (basic)
 def read_csv_with_fallback(path_or_buffer):
@@ -122,6 +122,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🔧 Pemetaan Kolom (opsional)")
 manual_year = st.sidebar.selectbox("Pilih kolom Tahun (optional)", options=[None] + df.columns.tolist())
 manual_water = st.sidebar.selectbox("Pilih kolom 'Air Bersih' (optional)", options=[None] + df.columns.tolist())
+manual_prov = st.sidebar.selectbox("Pilih kolom Provinsi (optional)", options=[None] + df.columns.tolist())
 
 # ============================================================
 # 5. TREND NASIONAL
@@ -168,7 +169,7 @@ if menu == "📈 Tren Nasional":
         st.warning("Kolom 'tahun' dan/or 'air_bersih' tidak ditemukan otomatis. Periksa daftar kolom di panel diagnostik atau pilih kolom secara manual di sidebar.")
 
 # ============================================================
-# 6. PREDIKSI PROVINSI
+# 6. PREDIKSI PROVINSI (dengan selector provinsi + default median per provinsi)
 # ============================================================
 elif menu == "🔮 Prediksi Provinsi":
     st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
@@ -183,6 +184,15 @@ elif menu == "🔮 Prediksi Provinsi":
         model = joblib.load(model_path)
         scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
 
+        # Detect provinsi column (auto or manual)
+        prov_candidates = ["provinsi", "province", "nama_provinsi", "kabupaten_provinsi", "region"]
+        prov_col = manual_prov if manual_prov else find_best_column(df.columns.tolist(), prov_candidates)
+        if prov_col:
+            unique_prov = df[prov_col].dropna().astype(str).unique().tolist()
+            unique_prov = sorted(unique_prov)
+        else:
+            unique_prov = []
+
         # load features if exists; jika tidak, coba ambil numeric columns sebagai fallback
         if os.path.exists(features_path):
             with open(features_path, "r") as f:
@@ -193,15 +203,49 @@ elif menu == "🔮 Prediksi Provinsi":
 
         st.markdown("Masukkan data indikator sesuai kebutuhan:")
         inputs = {}
+
+        # Province selector UI
+        if prov_col and unique_prov:
+            sel_prov = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
+            if sel_prov == "-- Pilih --":
+                sel_prov = None
+        else:
+            sel_prov = None
+            st.info("Kolom provinsi tidak ditemukan di dataset — nilai default per provinsi tidak tersedia.")
+
+        # Precompute medians: global median and per-prov median if prov available
+        global_medians = {}
+        prov_medians = {}
         for feat in features:
-            # default 0.0, jika kolom ada di df, isi nilai median sebagai default
-            default_val = 0.0
             if feat in df.columns:
-                try:
-                    default_val = float(pd.to_numeric(df[feat], errors="coerce").median(skipna=True))
-                except Exception:
-                    default_val = 0.0
-            inputs[feat] = st.number_input(f"{feat}", value=float(default_val), step=0.01)
+                global_medians[feat] = pd.to_numeric(df[feat], errors="coerce").median(skipna=True)
+                if sel_prov:
+                    # compute per-prov median
+                    prov_medians[feat] = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce").median(skipna=True)
+                else:
+                    prov_medians[feat] = None
+            else:
+                global_medians[feat] = 0.0
+                prov_medians[feat] = None
+
+        # Render numeric inputs using per-prov median if available, else global median, else 0.0
+        for feat in features:
+            default_val = 0.0
+            if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
+                default_val = float(prov_medians[feat])
+            elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
+                default_val = float(global_medians[feat])
+            # ensure default valid
+            try:
+                default_val = float(default_val)
+            except Exception:
+                default_val = 0.0
+
+            inputs[feat] = st.number_input(f"{feat}", value=default_val, step=0.01, format="%f")
+
+        # Optional: show which provinsi used for defaults
+        if sel_prov:
+            st.caption(f"Default input diisi dengan median dari provinsi: {sel_prov} (jika tersedia di dataset).")
 
         if st.button("Prediksi"):
             input_df = pd.DataFrame([inputs])
@@ -209,8 +253,13 @@ elif menu == "🔮 Prediksi Provinsi":
                 input_scaled = scaler.transform(input_df)
             else:
                 input_scaled = input_df
-            pred = model.predict(input_scaled)[0]
-            st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
+            try:
+                pred = model.predict(input_scaled)[0]
+                st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
+                if sel_prov:
+                    st.write(f"Provinsi yang dipilih: **{sel_prov}**")
+            except Exception as e:
+                st.error(f"Terjadi error saat prediksi: {e}")
 
 # ============================================================
 # 7. ANALISIS FAKTOR
