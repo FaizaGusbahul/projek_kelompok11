@@ -64,9 +64,9 @@ menu = st.sidebar.radio("Pilih Menu", ["📈 Tren Nasional", "🔮 Prediksi Prov
 # ============================================================
 if menu == "📈 Tren Nasional":
     st.header("📈 Tren Nasional Akses Air Bersih")
-    if "tahun" in df.columns and "air_bersih" in df.columns:
-        df_year = df.groupby("tahun")["air_bersih"].mean().reset_index()
-        st.line_chart(df_year, x="tahun", y="air_bersih", use_container_width=True)
+    if "Tahun" in df.columns and "Jumlah_Air_Bersih" in df.columns:
+        df_year = df.groupby("Tahun")["Jumlah_Air_Bersih"].mean().reset_index()
+        st.line_chart(df_year, x="Tahun", y="Jumlah_Air_Bersih", use_container_width=True)
         st.markdown("Grafik menunjukkan rata-rata jumlah air bersih nasional per tahun.")
     else:
         st.warning("Kolom 'tahun' dan 'air_bersih' tidak ditemukan dalam dataset.")
