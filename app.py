@@ -171,6 +171,7 @@ if menu == "📈 Tren Nasional":
 # ============================================================
 # 6. PREDIKSI PROVINSI (dengan selector provinsi + default median per provinsi)
 # ============================================================
+# ===================== Ganti blok "🔮 Prediksi Provinsi" dengan ini =====================
 elif menu == "🔮 Prediksi Provinsi":
     st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
 
@@ -184,9 +185,9 @@ elif menu == "🔮 Prediksi Provinsi":
         model = joblib.load(model_path)
         scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
 
-        # Detect provinsi column (auto or manual)
+        # Detect provinsi column (auto or manual) - reuse manual_prov from sidebar mapping if ada
         prov_candidates = ["provinsi", "province", "nama_provinsi", "kabupaten_provinsi", "region"]
-        prov_col = manual_prov if manual_prov else find_best_column(df.columns.tolist(), prov_candidates)
+        prov_col = manual_prov if 'manual_prov' in locals() and manual_prov else find_best_column(df.columns.tolist(), prov_candidates)
         if prov_col:
             unique_prov = df[prov_col].dropna().astype(str).unique().tolist()
             unique_prov = sorted(unique_prov)
@@ -201,8 +202,7 @@ elif menu == "🔮 Prediksi Provinsi":
             features = df.select_dtypes(include='number').columns.tolist()
             st.info("features.json tidak ditemukan — menggunakan kolom numerik dari dataset sebagai fitur fallback.")
 
-        st.markdown("Masukkan data indikator sesuai kebutuhan:")
-        inputs = {}
+        st.markdown("Masukkan data indikator atau pilih provinsi untuk mengisi otomatis:")
 
         # Province selector UI
         if prov_col and unique_prov:
@@ -213,53 +213,80 @@ elif menu == "🔮 Prediksi Provinsi":
             sel_prov = None
             st.info("Kolom provinsi tidak ditemukan di dataset — nilai default per provinsi tidak tersedia.")
 
-        # Precompute medians: global median and per-prov median if prov available
+        # compute medians
         global_medians = {}
         prov_medians = {}
         for feat in features:
             if feat in df.columns:
                 global_medians[feat] = pd.to_numeric(df[feat], errors="coerce").median(skipna=True)
                 if sel_prov:
-                    # compute per-prov median
-                    prov_medians[feat] = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce").median(skipna=True)
+                    prov_series = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce")
+                    prov_medians[feat] = prov_series.median(skipna=True) if not prov_series.empty else None
                 else:
                     prov_medians[feat] = None
             else:
-                global_medians[feat] = 0.0
+                global_medians[feat] = None
                 prov_medians[feat] = None
 
-        # Render numeric inputs using per-prov median if available, else global median, else 0.0
+        # Offer option to allow manual editing of auto-filled values
+        allow_manual = st.checkbox("Izinkan edit manual nilai indikator setelah autofill", value=False)
+
+        st.write("Nilai input akan diisi otomatis dari median provinsi (jika ada).")
+        inputs_for_prediction = {}
+        # Render inputs: if sel_prov present and allow_manual False -> keep disabled
         for feat in features:
-            default_val = 0.0
+            # decide default value precedence: prov_median -> global_median -> 0.0
+            default_val = None
             if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
                 default_val = float(prov_medians[feat])
             elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
                 default_val = float(global_medians[feat])
-            # ensure default valid
-            try:
-                default_val = float(default_val)
-            except Exception:
+            else:
                 default_val = 0.0
 
-            inputs[feat] = st.number_input(f"{feat}", value=default_val, step=0.01, format="%f")
+            # number_input supports 'disabled' param in recent Streamlit versions.
+            # disabled when province selected AND manual edit not allowed.
+            disabled_flag = (sel_prov is not None) and (not allow_manual)
 
-        # Optional: show which provinsi used for defaults
+            # Use a unique key so Streamlit keeps state for each feature
+            keyname = f"pred_{feat}"
+            # Show the input; if disabled True it will still return the default_val
+            inputs_for_prediction[feat] = st.number_input(
+                label=f"{feat}",
+                value=default_val,
+                step=0.01,
+                format="%f",
+                key=keyname,
+                disabled=disabled_flag
+            )
+
+        # Show info which source used for defaults
         if sel_prov:
-            st.caption(f"Default input diisi dengan median dari provinsi: {sel_prov} (jika tersedia di dataset).")
+            st.caption(f"Default diisi dengan median provinsi: {sel_prov}. (Centang 'Izinkan edit manual' untuk mengubah nilai.)")
+        else:
+            st.caption("Tidak ada provinsi dipilih — nilai default memakai median global atau 0.0.")
 
+        # Predict button (works even jika user tidak mengetik angka)
         if st.button("Prediksi"):
-            input_df = pd.DataFrame([inputs])
+            input_df = pd.DataFrame([inputs_for_prediction])
             if scaler:
-                input_scaled = scaler.transform(input_df)
+                try:
+                    input_scaled = scaler.transform(input_df)
+                except Exception as e:
+                    st.error(f"Gagal mengaplikasikan scaler: {e}")
+                    input_scaled = input_df
             else:
                 input_scaled = input_df
+
             try:
                 pred = model.predict(input_scaled)[0]
                 st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
                 if sel_prov:
-                    st.write(f"Provinsi yang dipilih: **{sel_prov}**")
+                    st.write(f"Provinsi: **{sel_prov}** (nilai default diambil dari median provinsi jika tersedia)")
             except Exception as e:
                 st.error(f"Terjadi error saat prediksi: {e}")
+# ========================================================================================
+
 
 # ============================================================
 # 7. ANALISIS FAKTOR
