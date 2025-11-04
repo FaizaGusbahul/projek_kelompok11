@@ -170,9 +170,9 @@ if menu == "📈 Tren Nasional":
 
 # ============================================================
 # 6. PREDIKSI PROVINSI (dengan selector provinsi + default median per provinsi)
-# ===================== BLOK "🔮 Prediksi Provinsi" (PERBAIKAN: TIDAK HILANG INDIKATOR) =====================
-elif menu == "🔮 Prediksi Akses Air Bersih per Provinsi":
-    st.header("🔮 Prediksi Akses Air Bersih per Provinsi (fix indikator hilang)")
+# ============================================================
+elif menu == "🔮 Prediksi Provinsi":
+    st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
 
     model_path = "model.pkl"
     scaler_path = "scaler.pkl"
@@ -184,187 +184,82 @@ elif menu == "🔮 Prediksi Akses Air Bersih per Provinsi":
         model = joblib.load(model_path)
         scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
 
-        def norm_name(s: str):
-            return str(s).strip().lower().replace(" ", "_")
-
-        # deteksi provinsi column (manual_prov jika ada)
+        # Detect provinsi column (auto or manual)
         prov_candidates = ["provinsi", "province", "nama_provinsi", "kabupaten_provinsi", "region"]
-        prov_col = manual_prov if ('manual_prov' in locals() and manual_prov) else find_best_column(df.columns.tolist(), prov_candidates)
-
+        prov_col = manual_prov if manual_prov else find_best_column(df.columns.tolist(), prov_candidates)
         if prov_col:
-            df['_prov__clean'] = df[prov_col].astype(str).str.strip()
-            df['_prov__clean_lower'] = df['_prov__clean'].str.lower()
-            unique_prov = sorted(df['_prov__clean'].dropna().unique().tolist())
+            unique_prov = df[prov_col].dropna().astype(str).unique().tolist()
+            unique_prov = sorted(unique_prov)
         else:
             unique_prov = []
 
-        # 1) Dapatkan expected_features dari model/scaler/features.json (tanpa langsung memaksa ini jadi widget)
-        expected_features = None
-        if hasattr(model, "feature_names_in_"):
-            expected_features = list(model.feature_names_in_)
-            st.info("Menggunakan feature_names_in_ dari model.")
-        elif os.path.exists(features_path):
-            try:
-                with open(features_path, "r") as f:
-                    expected_features = json.load(f)
-                    st.info("Menggunakan fitur dari features.json.")
-            except Exception:
-                expected_features = None
-        elif scaler is not None and hasattr(scaler, "feature_names_in_"):
-            expected_features = list(scaler.feature_names_in_)
-            st.info("Menggunakan feature_names_in_ dari scaler.")
-        # fallback ke kolom numerik DF
-        if not expected_features:
-            expected_features = df.select_dtypes(include='number').columns.tolist()
-            st.info("Fallback ke kolom numerik dataset sebagai expected_features.")
+        # load features if exists; jika tidak, coba ambil numeric columns sebagai fallback
+        if os.path.exists(features_path):
+            with open(features_path, "r") as f:
+                features = json.load(f)
+        else:
+            features = df.select_dtypes(include='number').columns.tolist()
+            st.info("features.json tidak ditemukan — menggunakan kolom numerik dari dataset sebagai fitur fallback.")
 
-        st.write("DEBUG: expected_features (what model expects):", expected_features[:20], " ... (total {})".format(len(expected_features)))
+        st.markdown("Masukkan data indikator sesuai kebutuhan:")
+        inputs = {}
 
-        # 2) Coba match expected_features ke kolom dataset (normalize vs original)
-        # buat peta normalized df cols -> original df col name
-        df_cols_norm_map = {col: norm_name(col) for col in df.columns.tolist()}
-        norm_to_dfcol = {v: k for k, v in df_cols_norm_map.items()}
-
-        matched_map = {}         # expected_feature -> matched_df_col (or None)
-        widget_features = []     # list of expected_feature names that we will render (preserve model feature key)
-
-        for feat in expected_features:
-            norm_feat = norm_name(feat)
-            matched = None
-            # direct normalized match
-            if norm_feat in norm_to_dfcol:
-                matched = norm_to_dfcol[norm_feat]
-            else:
-                # fuzzy match against normalized df column names
-                df_norm_list = list(df_cols_norm_map.values())
-                close = difflib.get_close_matches(norm_feat, df_norm_list, n=1, cutoff=0.7)
-                if close:
-                    matched = norm_to_dfcol[close[0]]
-            matched_map[feat] = matched
-            # if matched is not None, we can use this expected feature as widget, otherwise postpone
-            if matched:
-                widget_features.append(feat)
-
-        # If after matching we got NO widget_features, fallback to df numeric columns
-        if not widget_features:
-            st.warning("Tidak dapat mencocokkan expected_features ke kolom dataset. Menggunakan kolom numerik dataset sebagai indikator.")
-            numeric_cols = df.select_dtypes(include='number').columns.tolist()
-            # Set widget_features to be those column names (we'll use them as both expected key and label)
-            widget_features = numeric_cols
-            # Rebuild matched_map for these numeric columns (key = col, matched = col)
-            matched_map = {col: col for col in numeric_cols}
-            expected_features = numeric_cols  # override expected_features for downstream building
-
-        st.write("DEBUG: widget_features (akan ditampilkan):", widget_features[:20], " ... (total {})".format(len(widget_features)))
-
-        # UI: pilih provinsi
+        # Province selector UI
         if prov_col and unique_prov:
-            sel_prov_raw = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
-            sel_prov = None if sel_prov_raw == "-- Pilih --" else sel_prov_raw
+            sel_prov = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
+            if sel_prov == "-- Pilih --":
+                sel_prov = None
         else:
             sel_prov = None
             st.info("Kolom provinsi tidak ditemukan di dataset — nilai default per provinsi tidak tersedia.")
 
-        # Hitung median global dan per-prov untuk setiap matched feature
+        # Precompute medians: global median and per-prov median if prov available
         global_medians = {}
         prov_medians = {}
-        for feat in widget_features:
-            dfcol = matched_map.get(feat) if matched_map.get(feat) else feat
-            if dfcol in df.columns:
-                global_medians[feat] = pd.to_numeric(df[dfcol], errors="coerce").median(skipna=True)
-                if sel_prov is not None:
-                    mask = df['_prov__clean_lower'] == str(sel_prov).strip().lower()
-                    ser = pd.to_numeric(df.loc[mask, dfcol], errors="coerce")
-                    prov_medians[feat] = ser.median(skipna=True) if not ser.empty else None
+        for feat in features:
+            if feat in df.columns:
+                global_medians[feat] = pd.to_numeric(df[feat], errors="coerce").median(skipna=True)
+                if sel_prov:
+                    # compute per-prov median
+                    prov_medians[feat] = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce").median(skipna=True)
                 else:
                     prov_medians[feat] = None
             else:
-                global_medians[feat] = None
+                global_medians[feat] = 0.0
                 prov_medians[feat] = None
 
-        allow_manual = st.checkbox("Izinkan edit manual nilai indikator setelah autofill", value=False)
-        st.write("Nilai input akan diisi otomatis dari median provinsi (jika ada).")
-
-        # Render inputs. Use widget_features list (these keys are either expected feature names or df numeric col names)
-        inputs_for_prediction = {}
-        for feat in widget_features:
+        # Render numeric inputs using per-prov median if available, else global median, else 0.0
+        for feat in features:
             default_val = 0.0
             if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
                 default_val = float(prov_medians[feat])
             elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
                 default_val = float(global_medians[feat])
-            else:
+            # ensure default valid
+            try:
+                default_val = float(default_val)
+            except Exception:
                 default_val = 0.0
 
-            disabled_flag = (sel_prov is not None) and (not allow_manual)
-            keyname = f"pred_{feat}"
-            try:
-                inputs_for_prediction[feat] = st.number_input(label=f"{feat}", value=default_val, step=0.01, format="%f", key=keyname, disabled=disabled_flag)
-            except TypeError:
-                inputs_for_prediction[feat] = st.number_input(label=f"{feat} (default: {default_val})", value=default_val, step=0.01, format="%f", key=keyname)
+            inputs[feat] = st.number_input(f"{feat}", value=default_val, step=0.01, format="%f")
 
+        # Optional: show which provinsi used for defaults
         if sel_prov:
-            st.caption(f"Default diisi dengan median provinsi: {sel_prov}. (Centang 'Izinkan edit manual' untuk mengubah nilai.)")
-        else:
-            st.caption("Tidak ada provinsi dipilih — nilai default memakai median global atau 0.0.")
+            st.caption(f"Default input diisi dengan median dari provinsi: {sel_prov} (jika tersedia di dataset).")
 
-        # Prediksi: butuh membangun X_input yang sesuai expected_features order & names.
         if st.button("Prediksi"):
-            # Build final expected_features list to use for model input:
-            # If we still have model.feature_names_in_ originally (and matched_map had matches), keep that.
-            final_expected = expected_features
-
-            # Create dict values for final_expected: if we have an input for that feat use it, else fallback 0
-            final_input_dict = {}
-            for feat in final_expected:
-                if feat in inputs_for_prediction:
-                    final_input_dict[feat] = inputs_for_prediction[feat]
-                else:
-                    # try to find by matched_map reverse: maybe expected feature maps to dfcol which we have
-                    mapped_col = matched_map.get(feat)
-                    if mapped_col and mapped_col in inputs_for_prediction:
-                        final_input_dict[feat] = inputs_for_prediction[mapped_col]
-                    else:
-                        # fallback: try normalized name match with inputs_for_prediction keys
-                        normf = norm_name(feat)
-                        found = None
-                        for k in inputs_for_prediction.keys():
-                            if norm_name(k) == normf:
-                                found = inputs_for_prediction[k]
-                                break
-                        final_input_dict[feat] = found if found is not None else 0.0
-
-            X_input = pd.DataFrame([final_input_dict], columns=final_expected)
-
-            # Ensure types numeric
-            X_input = X_input.apply(pd.to_numeric, errors="coerce").fillna(0.0)
-
-            # Apply scaler if available
+            input_df = pd.DataFrame([inputs])
+            if scaler:
+                input_scaled = scaler.transform(input_df)
+            else:
+                input_scaled = input_df
             try:
-                if scaler is not None:
-                    X_scaled = scaler.transform(X_input)
-                else:
-                    X_scaled = X_input.values
-            except Exception as e:
-                st.error(f"Gagal mengaplikasikan scaler: {e}")
-                # fallback to values
-                X_scaled = X_input.values
-
-            # Predict
-            try:
-                pred = model.predict(X_scaled)[0]
+                pred = model.predict(input_scaled)[0]
                 st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
                 if sel_prov:
-                    st.write(f"Provinsi: **{sel_prov}**")
+                    st.write(f"Provinsi yang dipilih: **{sel_prov}**")
             except Exception as e:
                 st.error(f"Terjadi error saat prediksi: {e}")
-
-        # cleanup temp cols
-        if '_prov__clean' in df.columns:
-            df.drop(columns=[c for c in ['_prov__clean', '_prov__clean_lower'] if c in df.columns], inplace=True)
-# ========================================================================================
-
-
 
 # ============================================================
 # 7. ANALISIS FAKTOR
