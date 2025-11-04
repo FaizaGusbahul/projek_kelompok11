@@ -1,4 +1,4 @@
-# app.py
+# app.py (Versi Terbaru dengan Penyesuaian Dataset)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -45,7 +45,7 @@ st.title("💧 Prediksi Akses Air Bersih di Indonesia")
 st.markdown("""
 Aplikasi ini dikembangkan untuk mendukung **SDGs 6: Air Bersih dan Sanitasi Layak**, khususnya **SDG 6.1 (Akses Air Minum)** dan **SDG 6.4 (Pengelolaan Air dan Sanitasi Berkelanjutan)**.  
 Melalui pendekatan **Machine Learning**, aplikasi ini membantu pemerintah dan masyarakat:  
-- **Tren Nasional**: Memantau tren historis akses air bersih dan memprediksi 5 tahun ke depan (dengan opsi upload CSV sendiri).  
+- **Tren Nasional**: Memantau tren historis akses air bersih dan memprediksi 5 tahun ke depan (dengan opsi upload CSV sendiri, seperti DATA_WATER_SUPPLY_STATISTICS.csv).  
 - **Prediksi Provinsi**: Mensimulasikan akses air bersih berdasarkan indikator sosial-ekonomi dan kebijakan daerah.  
 - **Analisis Faktor**: Mengidentifikasi variabel paling berpengaruh untuk menentukan intervensi prioritas.  
 
@@ -66,26 +66,50 @@ if page == "Tren Nasional":
     st.header("📊 Tren Nasional Akses Air Bersih")
     st.markdown("""
     Halaman ini menampilkan tren historis akses air bersih berdasarkan data nasional dan prediksi 5 tahun ke depan.  
-    Anda bisa upload file CSV sendiri (misalnya, `df_year.csv` dengan kolom 'tahun' dan 'air_bersih').  
+    Upload file CSV Anda (misalnya, DATA_WATER_SUPPLY_STATISTICS.csv) – aplikasi akan otomatis mendeteksi kolom dan menghitung akses air bersih.  
     Ini mendukung pemantauan **SDG 6.1** (target 100% akses air minum) dan **SDG 6.4** (pengelolaan air berkelanjutan).
     """)
 
     # Upload CSV
-    uploaded_file = st.file_uploader("Upload file CSV (df_year.csv)", type="csv")
+    uploaded_file = st.file_uploader("Upload file CSV (misalnya, DATA_WATER_SUPPLY_STATISTICS.csv)", type="csv")
     if uploaded_file is not None:
         with st.spinner("Memproses data CSV..."):
             df_year = pd.read_csv(uploaded_file)
-            if 'tahun' not in df_year.columns or 'air_bersih' not in df_year.columns:
-                st.error("File CSV harus memiliki kolom 'tahun' dan 'air_bersih'.")
-            else:
-                st.success("Data berhasil di-upload!")
-                st.write("📋 **Preview Data:**")
-                st.dataframe(df_year.head())
+            st.success("Data berhasil di-upload!")
+            st.write("📋 **Preview Data:**")
+            st.dataframe(df_year.head())
+
+            # Normalisasi nama kolom ke lowercase untuk fleksibilitas
+            df_year.columns = df_year.columns.str.lower()
+
+            # Deteksi Kolom (case-insensitive)
+            year_col = None
+            access_col = None
+            volume_col = None
+            customer_col = None
+
+            for col in df_year.columns:
+                if 'tahun' in col:
+                    year_col = col
+                if 'efektifitas_produksi_air_bersih' in col:
+                    access_col = col
+                if 'volume_air_bersih_yang_disalurkan' in col:
+                    volume_col = col
+                if 'jumlah_pelanggan' in col:
+                    customer_col = col
+
+            if year_col and (access_col or volume_col):
+                # Hitung 'akses_air_bersih' sebagai persentase
+                if access_col:
+                    df_year['akses_air_bersih'] = df_year[access_col].astype(str).str.replace(',', '.').astype(float)
+                elif volume_col and customer_col:
+                    # Alternatif: Hitung berdasarkan volume disalurkan per pelanggan (asumsi sederhana)
+                    df_year['akses_air_bersih'] = (df_year[volume_col].astype(float) / df_year[customer_col].astype(float)) * 100  # Normalisasi ke %
 
                 # Tren Historis
                 st.subheader("📈 Tren Historis")
                 fig, ax = plt.subplots(figsize=(10, 5))
-                ax.plot(df_year['tahun'], df_year['air_bersih'], marker='o', color="#56CCF2")
+                ax.plot(df_year[year_col], df_year['akses_air_bersih'], marker='o', color="#56CCF2")
                 ax.set_title("Tren Akses Air Bersih Nasional")
                 ax.set_xlabel("Tahun")
                 ax.set_ylabel("Persentase Akses Air Bersih (%)")
@@ -95,20 +119,19 @@ if page == "Tren Nasional":
                 # Prediksi 5 Tahun ke Depan
                 st.subheader("🔮 Prediksi 5 Tahun ke Depan")
                 with st.spinner("Menghitung prediksi..."):
-                    last_year = df_year['tahun'].max()
+                    last_year = df_year[year_col].max()
                     future_years = [last_year + i for i in range(1, 6)]
                     
-                    # Asumsi: Gunakan rata-rata indikator historis sebagai input untuk prediksi
+                    # Gunakan rata-rata indikator dari dataset
                     avg_input = df_year[features].mean() if all(feat in df_year.columns for feat in features) else pd.Series([0.0] * len(features), index=features)
                     input_df = pd.DataFrame([avg_input])
                     X_scaled = scaler.transform(input_df[features])
                     pred_current = model.predict(X_scaled)[0]
                     
-                    # Prediksi sederhana: Asumsi tren linear atau konstan
-                    predictions = [pred_current + (i * 2) for i in range(6)]  # Peningkatan 2% per tahun
+                    predictions = [pred_current + (i * 2) for i in range(6)]
                     
                     fig2, ax2 = plt.subplots(figsize=(10, 5))
-                    ax2.plot(df_year['tahun'], df_year['air_bersih'], marker='o', label="Historis", color="#56CCF2")
+                    ax2.plot(df_year[year_col], df_year['akses_air_bersih'], marker='o', label="Historis", color="#56CCF2")
                     ax2.plot(future_years, predictions[1:], marker='x', linestyle='--', label="Prediksi", color="#FF6B6B")
                     ax2.set_title("Prediksi Akses Air Bersih 5 Tahun ke Depan")
                     ax2.set_xlabel("Tahun")
@@ -119,12 +142,14 @@ if page == "Tren Nasional":
 
                     # Pemantauan SDG
                     st.subheader("🌍 Pemantauan SDG 6.1 & 6.4")
-                    current_access = df_year['air_bersih'].iloc[-1]
+                    current_access = df_year['akses_air_bersih'].iloc[-1]
                     if current_access >= 100:
                         st.success("✅ SDG 6.1: Target akses air minum tercapai.")
                     else:
                         st.warning(f"🔸 SDG 6.1: Akses air minum saat ini {current_access:.2f}%. Perlu intervensi.")
                     st.info("🔄 SDG 6.4: Prediksi menunjukkan peningkatan pengelolaan air; fokus pada keberlanjutan sumber daya.")
+            else:
+                st.error("Kolom 'tahun' (atau varian seperti 'Tahun') dan kolom terkait akses air bersih (misalnya, 'Efektifitas_Produksi_Air_Bersih_Perusahaan_Air_Bersih' atau 'Volume_Air_Bersih_yang_Disalurkan') tidak ditemukan. Silakan periksa dataset Anda. Kolom yang tersedia: " + ", ".join(df_year.columns))
     else:
         st.info("Silakan upload file CSV untuk memulai analisis tren.")
 
@@ -134,7 +159,7 @@ if page == "Tren Nasional":
 elif page == "Prediksi Provinsi":
     st.header("📥 Prediksi Akses Air Bersih per Provinsi")
     st.markdown("""
-    Isi nilai dari setiap indikator sosial-ekonomi di bawah ini.  
+    Isi nilai dari setiap indikator sosial-ekonomi di bawah ini (berdasarkan kolom dataset Anda, seperti 'Jumlah_Pekerja' atau 'Biaya_Listrik').  
     Model akan memprediksi persentase masyarakat yang memiliki akses terhadap air bersih dan mensimulasikan dampak kebijakan daerah.
     """)
 
