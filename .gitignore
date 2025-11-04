@@ -1,0 +1,13 @@
+# Ignore model artifacts
+*.pkl
+*.joblib
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.vscode/
+.DS_Store
+
+# Dataset besar (opsional)
+*.csv
