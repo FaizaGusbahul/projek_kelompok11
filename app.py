@@ -99,4 +99,56 @@ if menu == "Tren Nasional":
         st.subheader("Hasil Prediksi 5 Tahun ke Depan")
         st.dataframe(forecast.round(2))
     else:
-        st.info("📂 Unggah file `DATA_WATER_SUPPLY_STATISTICS_clean.csv` ke folder proyek
+        st.info("📂 Unggah file `DATA_WATER_SUPPLY_STATISTICS_clean.csv` ke folder proyek untuk melihat tren nasional.")
+
+# ======================
+# 🔮 PREDIKSI PROVINSI
+# ======================
+elif menu == "Prediksi Provinsi":
+    st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
+    st.markdown("""
+    Masukkan data indikator untuk memprediksi jumlah air bersih.  
+    Ini membantu perencanaan kebijakan daerah (misalnya dampak peningkatan kapasitas produksi air terhadap hasil air bersih).
+    """)
+
+    inputs = {}
+    for feat in features:
+        inputs[feat] = st.number_input(f"{feat}", value=0.0, step=0.01)
+
+    if st.button("Prediksi"):
+        input_df = pd.DataFrame([inputs])
+        input_scaled = scaler.transform(input_df)
+        pred = model.predict(input_scaled)[0]
+        st.success(f"💧 Prediksi Jumlah Air Bersih: **{pred:.2f}** (unit sesuai data pelatihan model)")
+
+# ======================
+# 📊 ANALISIS FAKTOR
+# ======================
+elif menu == "Analisis Faktor":
+    st.header("📊 Analisis Faktor Pengaruh")
+    st.markdown("""
+    Lihat fitur yang paling berpengaruh terhadap ketersediaan air bersih.  
+    Analisis ini membantu menentukan **prioritas intervensi kebijakan** untuk mencapai SDG 6.
+    """)
+
+    # Ambil importance dari model (asumsikan Random Forest)
+    try:
+        importance = model.feature_importances_
+        feat_imp = pd.DataFrame({'Fitur': features, 'Importance': importance}) \
+                     .sort_values(by='Importance', ascending=False).head(10)
+
+        fig, ax = plt.subplots()
+        ax.barh(feat_imp['Fitur'][::-1], feat_imp['Importance'][::-1])
+        ax.set_xlabel('Tingkat Pengaruh')
+        ax.set_title('10 Fitur Paling Berpengaruh terhadap Akses Air Bersih')
+        st.pyplot(fig)
+
+        st.dataframe(feat_imp)
+    except AttributeError:
+        st.error("Model ini tidak mendukung analisis feature importance.")
+
+# ======================
+# 🪶 FOOTER
+# ======================
+st.markdown("---")
+st.markdown("💧 **Dikembangkan untuk mendukung SDG 6: Air Bersih dan Sanitasi Layak.**  \n📬 Hubungi pengembang jika membutuhkan bantuan atau versi lanjutan aplikasi.")
