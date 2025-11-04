@@ -1,194 +1,113 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
+import pickle
 import json
 import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import r2_score, mean_absolute_error
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import plotly.graph_objects as go
 
-# ======================
-# ⚙️ KONFIGURASI DASAR
-# ======================
-st.set_page_config(
-    page_title="💧 Dashboard SDG 6 – Air Bersih Indonesia",
-    layout="wide",
-    page_icon="💧"
-)
-
-# ======================
-# 📦 LOAD DATA DAN MODEL
-# ======================
+# Load file dari Colab
 @st.cache_resource
 def load_model():
-    return joblib.load("model.pkl")
+    with open('model.pkl', 'rb') as f:
+        model = pickle.load(f)
+    return model
 
 @st.cache_resource
 def load_scaler():
-    return joblib.load("scaler.pkl")
+    with open('scaler.pkl', 'rb') as f:
+        scaler = pickle.load(f)
+    return scaler
 
-@st.cache_data
+@st.cache_resource
 def load_features():
-    with open("features.json", "r") as f:
-        return json.load(f)
+    with open('features.json', 'r') as f:
+        features = json.load(f)
+    return features
 
 @st.cache_data
-def load_year_data():
-    return pd.read_csv("df_year.csv")
+def load_data():
+    df = pd.read_csv('DATA_WATER_SUPPLY_STATISTICS_clean.csv')
+    return df
 
+# Load semua
 model = load_model()
 scaler = load_scaler()
 features = load_features()
-df_year = load_year_data()
+df = load_data()
 
-# ======================
-# 🎯 HEADER
-# ======================
-st.title("💧 Prediksi & Analisis Akses Air Bersih di Indonesia")
+# Judul App
+st.title("🌊 Prediksi Akses Air Bersih di Indonesia")
 st.markdown("""
-Aplikasi ini dikembangkan untuk mendukung **SDG 6: Air Bersih dan Sanitasi Layak**  
-melalui analisis **tren, prediksi provinsi, dan faktor penentu utama akses air bersih**.  
+Aplikasi ini menggunakan machine learning untuk memprediksi dan menganalisis akses air bersih, mendukung **SDG 6 (Air Bersih dan Sanitasi Layak)**.
+- **Tujuan**: Membantu pemerintah dan masyarakat memantau progres akses air minum yang aman, mengidentifikasi wilayah berisiko, dan merencanakan intervensi seperti peningkatan kapasitas produksi atau tenaga kerja.
+- **Data**: Berdasarkan dataset statistik air bersih dari berbagai provinsi Indonesia.
 """)
 
-st.divider()
+# Sidebar untuk navigasi
+menu = st.sidebar.selectbox("Pilih Menu", ["Tren Nasional", "Prediksi Provinsi", "Analisis Faktor"])
 
-# ======================
-# 🔹 PILIH HALAMAN
-# ======================
-menu = st.sidebar.radio(
-    "Navigasi Halaman",
-    ["Tren Nasional", "Prediksi Provinsi", "Analisis Faktor"]
-)
-
-# ==========================================================
-# 1️⃣ TREN NASIONAL — Pemantauan SDG 6.1 & 6.4
-# ==========================================================
 if menu == "Tren Nasional":
     st.header("📈 Tren Nasional Akses Air Bersih")
-    st.markdown("""
-    Menampilkan perkembangan historis dan proyeksi **5 tahun ke depan** berdasarkan data `df_year.csv`.  
-    Analisis ini mendukung pemantauan **SDG 6.1 (akses air bersih)** dan **SDG 6.4 (efisiensi penggunaan air)**.
-    """)
+    st.markdown("Pantau perkembangan rata-rata air bersih per tahun dan prediksi 5 tahun ke depan untuk mendukung SDG 6.1 (akses air minum layak).")
+    
+    # Agregasi per tahun
+    df_year = df.groupby('tahun')['air_bersih'].mean()
+    df_year.index = pd.to_datetime(df_year.index, format='%Y')
+    
+    # Model forecast
+    model_hw = ExponentialSmoothing(df_year, trend='add', seasonal=None, damped_trend=True)
+    fit = model_hw.fit(optimized=True)
+    forecast = fit.forecast(steps=5)
+    
+    # Plot dengan Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_year.index, y=df_year.values, mode='lines+markers', name='Aktual', line=dict(color='steelblue')))
+    fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines+markers', name='Prediksi', line=dict(color='darkorange', dash='dash')))
+    fig.update_layout(title="Tren dan Prediksi Jumlah Air Bersih (Rata-rata Nasional)", xaxis_title="Tahun", yaxis_title="Jumlah Air Bersih")
+    st.plotly_chart(fig)
+    
+    st.subheader("Hasil Prediksi 5 Tahun ke Depan")
+    st.dataframe(forecast.round(2))
 
-    provinsi_list = sorted(df_year["Provinsi"].unique())
-    prov_pilih = st.selectbox("Pilih Provinsi", ["Semua Provinsi"] + provinsi_list)
-
-    # Filter data
-    if prov_pilih == "Semua Provinsi":
-        df_plot = df_year.groupby("Tahun")["Jumlah_Air_Bersih"].sum().reset_index()
-        judul = "Tren Nasional"
-    else:
-        df_plot = df_year[df_year["Provinsi"] == prov_pilih]
-        judul = f"Tren Provinsi {prov_pilih}"
-
-    # Plot tren historis
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(df_plot["Tahun"], df_plot["Jumlah_Air_Bersih"], marker="o", linewidth=2)
-    ax.set_title(judul)
-    ax.set_xlabel("Tahun")
-    ax.set_ylabel("Jumlah Air Bersih (unit/liter)")
-    st.pyplot(fig)
-
-    # Prediksi sederhana 5 tahun ke depan (linear)
-    df_plot = df_plot.sort_values("Tahun")
-    x = np.arange(len(df_plot))
-    y = df_plot["Jumlah_Air_Bersih"].values
-    coef = np.polyfit(x, y, 1)
-    pred_line = np.poly1d(coef)
-
-    tahun_lanjut = np.arange(len(df_plot), len(df_plot) + 5)
-    tahun_pred = np.arange(df_plot["Tahun"].iloc[-1] + 1, df_plot["Tahun"].iloc[-1] + 6)
-    pred_y = pred_line(tahun_lanjut)
-
-    fig2, ax2 = plt.subplots(figsize=(8, 4))
-    ax2.plot(df_plot["Tahun"], y, marker="o", label="Data Aktual")
-    ax2.plot(tahun_pred, pred_y, "--o", label="Prediksi 5 Tahun ke Depan")
-    ax2.legend()
-    ax2.set_title(f"Proyeksi Air Bersih – {judul}")
-    st.pyplot(fig2)
-
-    st.info("💡 Prediksi ini bersifat sederhana dan dapat dikembangkan menggunakan model time-series seperti ARIMA atau Prophet untuk hasil lebih akurat.")
-
-# ==========================================================
-# 2️⃣ PREDIKSI PROVINSI — Simulasi Kebijakan Daerah
-# ==========================================================
 elif menu == "Prediksi Provinsi":
     st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
-    st.markdown("""
-    Model Machine Learning digunakan untuk memperkirakan **persentase akses air bersih**
-    berdasarkan indikator sosial–ekonomi dan operasional perusahaan air bersih.
-    """)
+    st.markdown("Masukkan data indikator untuk memprediksi jumlah air bersih. Ini membantu simulasi kebijakan daerah, seperti dampak peningkatan kapasitas terhadap akses air bersih (SDG 6.4: efisiensi air).")
+    
+    # Input form berdasarkan features
+    inputs = {}
+    for feat in features:
+        inputs[feat] = st.number_input(f"{feat} (numerik)", value=0.0, step=0.01)
+    
+    if st.button("Prediksi"):
+        input_df = pd.DataFrame([inputs])
+        input_scaled = scaler.transform(input_df)
+        pred = model.predict(input_scaled)[0]
+        st.success(f"Prediksi Jumlah Air Bersih: {pred:.2f}")
+        
+        # Evaluasi sederhana (opsional, jika ada data test)
+        # st.info("Model ini memiliki R² ~0.85 berdasarkan data training.")
 
-    # Pilihan provinsi & tahun
-    provinsi = st.selectbox("Pilih Provinsi", sorted(df_year["Provinsi"].unique()))
-    tahun = st.number_input("Masukkan Tahun", min_value=2000, max_value=2100, value=2025)
-
-    st.markdown("### 🧾 Input Indikator")
-    user_input = {}
-    cols = st.columns(3)
-    for i, feat in enumerate(features):
-        col = cols[i % 3]
-        user_input[feat] = col.number_input(feat, value=0.0)
-
-    input_df = pd.DataFrame([user_input])
-    st.dataframe(input_df, use_container_width=True)
-
-    if st.button("🚀 Jalankan Prediksi"):
-        try:
-            X_scaled = scaler.transform(input_df[features])
-            pred = model.predict(X_scaled)[0]
-
-            st.success(f"💧 Perkiraan Akses Air Bersih: {pred:.2f}%")
-
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.barh(["Prediksi Akses Air Bersih"], [pred], color="#56CCF2")
-            ax.set_xlim(0, 100)
-            ax.set_xlabel("Persentase (%)")
-            st.pyplot(fig)
-
-            if pred < 60:
-                st.error("⚠️ Akses air bersih rendah – perlu peningkatan infrastruktur dan efisiensi produksi.")
-            elif pred < 80:
-                st.warning("🟡 Akses cukup – masih perlu perbaikan di daerah pedesaan dan kelompok sosial.")
-            else:
-                st.success("✅ Akses tinggi – fokus pada keberlanjutan dan pemeliharaan sumber air.")
-
-        except Exception as e:
-            st.error(f"Terjadi kesalahan: {e}")
-
-# ==========================================================
-# 3️⃣ ANALISIS FAKTOR — Menentukan Intervensi Prioritas
-# ==========================================================
 elif menu == "Analisis Faktor":
-    st.header("🧠 Analisis Faktor Penting (Feature Importance)")
-    st.markdown("""
-    Menunjukkan **variabel yang paling memengaruhi akses air bersih**,  
-    untuk membantu pemerintah menentukan **prioritas intervensi kebijakan**.
-    """)
+    st.header("📊 Analisis Faktor Pengaruh")
+    st.markdown("Lihat fitur yang paling berpengaruh terhadap akses air bersih. Ini membantu prioritas intervensi, seperti fokus pada biaya listrik atau tenaga kerja, untuk mencapai SDG 6.")
+    
+    # Ambil importance dari model (asumsikan Random Forest)
+    importance = model.feature_importances_
+    feat_imp = pd.DataFrame({'Fitur': features, 'Importance': importance}).sort_values(by='Importance', ascending=False).head(10)
+    
+    # Plot
+    fig, ax = plt.subplots()
+    ax.barh(feat_imp['Fitur'][::-1], feat_imp['Importance'][::-1])
+    ax.set_xlabel('Importance')
+    ax.set_title('10 Fitur Terpenting')
+    st.pyplot(fig)
+    
+    st.dataframe(feat_imp)
 
-    if hasattr(model, "feature_importances_"):
-        importance = pd.DataFrame({
-            "Feature": features,
-            "Importance": model.feature_importances_
-        }).sort_values(by="Importance", ascending=True)
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.barh(importance["Feature"], importance["Importance"], color="#4DB6AC")
-        ax.set_title("Feature Importance – Faktor Penentu Akses Air Bersih")
-        st.pyplot(fig)
-
-        top_factors = importance.sort_values(by="Importance", ascending=False).head(5)
-        st.markdown("### 🔍 Lima Faktor Teratas:")
-        for i, row in top_factors.iterrows():
-            st.markdown(f"- **{row['Feature']}** → kontribusi {row['Importance']:.3f}")
-    else:
-        st.warning("Model tidak memiliki atribut feature_importances_. Gunakan model berbasis pohon (misal RandomForest atau XGBoost) agar fitur ini aktif.")
-
-st.divider()
-
-# ======================
-# 🌍 PENUTUP
-# ======================
-st.caption("""
-📊 **SDG 6.1 & 6.4 – Air Bersih dan Efisiensi Penggunaan Air**  
-Aplikasi ini mendukung pengambilan keputusan berbasis data dalam perencanaan infrastruktur air bersih.
-""")
+# Footer
+st.markdown("---")
+st.markdown("**Dikembangkan untuk mendukung SDG 6**. Jika ada pertanyaan, hubungi pengembang.")
