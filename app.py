@@ -24,7 +24,7 @@ Kamu dapat mengunggah dataset baru atau menggunakan dataset bawaan untuk:
 # ============================================================
 st.sidebar.header("📂 Pilih Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload dataset CSV kamu", type=["csv"])
-default_path = "DATA_WATER_SUPPLY_STATISTICS.csv"
+default_path = "TUGAS_DATA_KELOMPOK11/DATA_WATER_SUPPLY_STATISTICS.csv"
 
 if uploaded_file:
     df_raw = pd.read_csv(uploaded_file)
@@ -64,9 +64,9 @@ menu = st.sidebar.radio("Pilih Menu", ["📈 Tren Nasional", "🔮 Prediksi Prov
 # ============================================================
 if menu == "📈 Tren Nasional":
     st.header("📈 Tren Nasional Akses Air Bersih")
-    if "Tahun" in df.columns and "Jumlah_Air_Bersih" in df.columns:
-        df_year = df.groupby("Tahun")["Jumlah_Air_Bersih"].mean().reset_index()
-        st.line_chart(df_year, x="Tahun", y="Jumlah_Air_Bersih", use_container_width=True)
+    if "tahun" in df.columns and "air_bersih" in df.columns:
+        df_year = df.groupby("tahun")["air_bersih"].mean().reset_index()
+        st.line_chart(df_year, x="tahun", y="air_bersih", use_container_width=True)
         st.markdown("Grafik menunjukkan rata-rata jumlah air bersih nasional per tahun.")
     else:
         st.warning("Kolom 'tahun' dan 'air_bersih' tidak ditemukan dalam dataset.")
