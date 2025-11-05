@@ -256,36 +256,8 @@ elif menu == "🔮 Prediksi Provinsi":
             except Exception as e:
                 st.error(f"Terjadi error saat prediksi: {e}")
 
-# ============================================================
-# 7. ANALISIS FAKTOR
-# ============================================================
-elif menu == "📊 Analisis Faktor":
-    st.header("📊 Analisis Faktor yang Mempengaruhi Akses Air Bersih")
+# ====
 
-    model_path = "model.pkl"
-    features_path = "features.json"
-    if os.path.exists(model_path) and os.path.exists(features_path):
-        model = joblib.load(model_path)
-        with open(features_path, "r") as f:
-            features = json.load(f)
-
-        if hasattr(model, "feature_importances_"):
-            importance = pd.DataFrame({
-                "Fitur": features,
-                "Importance": model.feature_importances_
-            }).sort_values(by="Importance", ascending=True)  # ascending so barh displays largest on top
-
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.barh(importance["Fitur"], importance["Importance"])
-            ax.set_xlabel("Tingkat Pengaruh")
-            ax.set_ylabel("Fitur")
-            ax.set_title("Faktor Paling Berpengaruh terhadap Akses Air Bersih")
-            st.pyplot(fig)
-            st.dataframe(importance.sort_values(by="Importance", ascending=False).reset_index(drop=True))
-        else:
-            st.warning("Model tidak mendukung atribut feature_importances_.")
-    else:
-        st.error("❌ File model atau fitur tidak ditemukan. Pastikan model.pkl dan features.json ada jika ingin analisis faktor.")
 
 # ============================================================
 # 8. PENJELASAN AKHIR
