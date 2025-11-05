@@ -1,302 +1,154 @@
-# streamlit_app.py
 import streamlit as st
 import pandas as pd
-import joblib
+import numpy as np
+import pickle
 import json
-import os
 import matplotlib.pyplot as plt
-import difflib
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import plotly.graph_objects as go
 
 # ============================================================
-# 1. SETUP PAGE
+# 1. LOAD MODEL DAN FILE PENDUKUNG
 # ============================================================
-st.set_page_config(page_title="Analisis Akses Air Bersih", layout="wide", page_icon="💧")
-st.title("💧 Analisis dan Prediksi Akses Air Bersih di Indonesia")
+@st.cache_resource
+def load_model():
+    with open("model.pkl", "rb") as f:
+        model = pickle.load(f)
+    return model
 
+@st.cache_resource
+def load_scaler():
+    with open("scaler.pkl", "rb") as f:
+        scaler = pickle.load(f)
+    return scaler
+
+@st.cache_resource
+def load_features():
+    with open("features.json", "r") as f:
+        features = json.load(f)
+    return features
+
+model = load_model()
+scaler = load_scaler()
+features = load_features()
+
+# ============================================================
+# 2. CONFIGURASI PAGE
+# ============================================================
+st.set_page_config(page_title="Prediksi Akses Air Bersih (SDG 6)", layout="wide")
+st.title("💧 Prediksi Akses Air Bersih di Indonesia")
 st.markdown("""
-Aplikasi ini dibuat untuk mendukung **SDG 6: Air Bersih dan Sanitasi Layak**.  
-Kamu dapat mengunggah dataset baru atau menggunakan dataset bawaan untuk:
-- 📊 Melihat tren dan analisis akses air bersih.  
-- 🤖 Melakukan prediksi menggunakan model machine learning (Random Forest).  
-- 🧩 Mengetahui faktor yang paling berpengaruh terhadap akses air bersih.
+Aplikasi ini dibuat untuk mendukung *Tujuan Pembangunan Berkelanjutan (SDG 6)*: 
+Menjamin ketersediaan dan pengelolaan air bersih yang berkelanjutan untuk semua.
+
+Fungsi aplikasi:
+- Menganalisis tren nasional air bersih
+- Melakukan prediksi berdasarkan indikator tiap provinsi
+- Melihat faktor paling berpengaruh terhadap akses air bersih
 """)
 
 # ============================================================
-# 2. PILIH DATASET
+# 3. PILIH MENU
 # ============================================================
-st.sidebar.header("📂 Pilih Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload dataset CSV kamu", type=["csv"])
-default_path = "TUGAS_DATA_KELOMPOK11/DATA_WATER_SUPPLY_STATISTICS.csv"
-
-# try reading CSV with a couple fallback options (basic)
-def read_csv_with_fallback(path_or_buffer):
-    try:
-        return pd.read_csv(path_or_buffer)
-    except Exception:
-        try:
-            # coba separator semicolon
-            return pd.read_csv(path_or_buffer, sep=';')
-        except Exception:
-            # terakhir, coba engine python dan infer
-            return pd.read_csv(path_or_buffer, engine='python')
-
-if uploaded_file:
-    df_raw = read_csv_with_fallback(uploaded_file)
-    st.sidebar.success("✅ Dataset berhasil diunggah!")
-else:
-    if os.path.exists(default_path):
-        df_raw = read_csv_with_fallback(default_path)
-        st.sidebar.info("ℹ️ Menggunakan dataset default dari folder proyek.")
-    else:
-        st.error("❌ Tidak ada dataset ditemukan. Upload file CSV terlebih dahulu.")
-        st.stop()
+menu = st.sidebar.radio("Navigasi", ["📈 Tren Nasional", "🔮 Prediksi Provinsi", "📊 Analisis Faktor"])
 
 # ============================================================
-# 3. PEMBERSIHAN DATA OTOMATIS (naming normalization + basic impute)
+# 4. UPLOAD DATASET
 # ============================================================
-st.header("🧹 Pembersihan Data Otomatis")
-st.write("Sistem akan membersihkan data secara otomatis (hapus duplikat, isi nilai kosong, normalisasi kolom).")
-
-# Copy original, keep original column names for mapping convenience
-df = df_raw.copy()
-
-# Keep an original copy of column names
-original_columns = df.columns.tolist()
-
-# Normalize columns for internal operations but keep mapping to original labels
-normalized_map = {col: col.strip().lower().replace(" ", "_") for col in original_columns}
-df.rename(columns=normalized_map, inplace=True)
-
-# Remove duplicate rows and drop-fully-empty columns
-df.drop_duplicates(inplace=True)
-df.dropna(axis=1, how='all', inplace=True)
-
-# Fill numeric columns' missing with median
-num_cols = df.select_dtypes(include='number').columns
-for col in num_cols:
-    df[col] = df[col].fillna(df[col].median())
-
-
-# ============================================================
-# helpers: auto-detect columns (fuzzy) and cleaning numeric strings
-# ============================================================
-def find_best_column(col_names, candidates, cutoff=0.6):
-    """
-    col_names: list of normalized column names (lowercase underscore)
-    candidates: list of candidate keys in normalized form
-    returns the chosen normalized column name or None
-    """
-    col_lower = [c.lower() for c in col_names]
-    # exact candidate match
-    for cand in candidates:
-        if cand in col_lower:
-            return col_names[col_lower.index(cand)]
-    # fuzzy match
-    for cand in candidates:
-        matches = difflib.get_close_matches(cand, col_lower, n=1, cutoff=cutoff)
-        if matches:
-            return col_names[col_lower.index(matches[0])]
-    return None
-
-def clean_numeric_series(ser):
-    """Bersihkan string numeric: hapus % dan koma ribuan lalu ubah ke numeric"""
-    s = ser.astype(str).str.strip()
-    s = s.str.replace("%", "", regex=False)
-    s = s.str.replace(",", "", regex=False)
-    # Hapus karakter non-digit kecuali minus dan titik
-    s = s.str.replace(r"[^\d\.\-]", "", regex=True)
-    return pd.to_numeric(s, errors="coerce")
-
-# ============================================================
-# 4. PILIH MENU ANALISIS + manuel mapping
-# ============================================================
-menu = st.sidebar.radio("Pilih Menu", ["📈 Tren Nasional", "🔮 Prediksi Provinsi", "📊 Analisis Faktor"])
-
-# Sidebar manual mapping (berguna jika auto-detect salah)
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔧 Pemetaan Kolom (opsional)")
-manual_year = st.sidebar.selectbox("Pilih kolom Tahun (optional)", options=[None] + df.columns.tolist())
-manual_water = st.sidebar.selectbox("Pilih kolom 'Air Bersih' (optional)", options=[None] + df.columns.tolist())
-manual_prov = st.sidebar.selectbox("Pilih kolom Provinsi (optional)", options=[None] + df.columns.tolist())
+uploaded_file = st.sidebar.file_uploader("📂 Upload dataset mentah (.csv)", type=["csv"])
+if uploaded_file:
+    df_raw = pd.read_csv(uploaded_file)
+    st.sidebar.success("✅ Dataset berhasil diunggah")
+else:
+    st.sidebar.warning("Gunakan contoh dataset bawaan")
+    df_raw = pd.read_csv("DATA_WATER_SUPPLY_STATISTICS.csv")
 
 # ============================================================
-# 5. TREND NASIONAL
+# 5. CLEANING OTOMATIS
+# ============================================================
+def clean_dataset(df):
+    df.columns = [c.strip().replace(" ", "").replace("-", "").lower() for c in df.columns]
+    df = df.drop_duplicates()
+    df = df.dropna(how="all")
+    # Pastikan kolom tahun bertipe numerik
+    if "tahun" in df.columns:
+        df["tahun"] = pd.to_numeric(df["tahun"], errors="coerce")
+    # Ganti nilai kosong dengan median
+    df = df.fillna(df.median(numeric_only=True))
+    return df
+
+df = clean_dataset(df_raw)
+
+# ============================================================
+# 6. MENU: TREN NASIONAL
 # ============================================================
 if menu == "📈 Tren Nasional":
-    st.header("📈 Tren Nasional Akses Air Bersih")
+    st.header("📊 Tren Nasional Air Bersih")
+    st.markdown("Menampilkan perkembangan rata-rata air bersih di seluruh provinsi dan prediksi 5 tahun ke depan.")
 
-    # kandidat nama kolom (dalam bentuk normalized): tambahkan kemungkinan lain jika dataset mu berbeda
-    year_candidates = ["tahun", "year", "tahun_berdasarkan", "tahun_akses"]
-    water_candidates = [
-        "air_bersih", "airbersih", "access_to_clean_water", "clean_water", "persentase_air_bersih",
-        "percent_access", "presentase_air_bersih", "akses_air_bersih", "persen_air_bersih"
-    ]
+    # Pilih kolom target
+    target_col = st.selectbox("Pilih kolom utama (misal jumlah_air_bersih)", df.columns)
+    df_year = df.groupby("tahun")[target_col].mean().dropna()
 
-    # gunakan manual jika user memilih
-    year_col = manual_year if manual_year else find_best_column(df.columns.tolist(), year_candidates)
-    water_col = manual_water if manual_water else find_best_column(df.columns.tolist(), water_candidates)
+    if not df_year.empty:
+        df_year.index = pd.to_datetime(df_year.index, format="%Y")
 
-    st.write("Deteksi kolom -> tahun:", year_col, ", air_bersih:", water_col)
+        # Forecast dengan Holt-Winters
+        model_hw = ExponentialSmoothing(df_year, trend='add', seasonal=None, damped_trend=True)
+        fit = model_hw.fit(optimized=True)
+        forecast = fit.forecast(steps=5)
 
-    if year_col and water_col:
-        # bersihkan kolom tahun: ambil digit (misal '2020' dari string)
-        try:
-            df[year_col] = pd.to_numeric(df[year_col].astype(str).str.replace(r"\D+", "", regex=True), errors="coerce")
-        except Exception:
-            # fallback: biarkan apa adanya
-            pass
+        # Plot
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_year.index, y=df_year.values, mode='lines+markers', name='Aktual', line=dict(color='steelblue')))
+        fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines+markers', name='Prediksi', line=dict(color='orange', dash='dash')))
+        fig.update_layout(title=f"Tren dan Prediksi Nasional: {target_col}", xaxis_title="Tahun", yaxis_title="Nilai Rata-rata")
+        st.plotly_chart(fig, use_container_width=True)
 
-        # bersihkan kolom air bersih jadi numeric
-        df[water_col] = clean_numeric_series(df[water_col])
-
-        df_year = df.groupby(year_col)[water_col].mean().reset_index().dropna()
-        if df_year.empty:
-            st.warning("Data tahun / air_bersih ada tetapi hasil agregasi kosong (cek nilai kosong atau format).")
-        else:
-            # Sort by year (if numeric)
-            try:
-                df_year = df_year.sort_values(by=year_col)
-            except Exception:
-                pass
-            st.line_chart(df_year, x=year_col, y=water_col, use_container_width=True)
-            st.markdown("Grafik menunjukkan rata-rata jumlah air bersih nasional per tahun.")
+        st.subheader("Hasil Prediksi 5 Tahun ke Depan")
+        st.dataframe(forecast.round(2).rename("Prediksi"))
     else:
-        st.warning("Kolom 'tahun' dan/or 'air_bersih' tidak ditemukan otomatis. Periksa daftar kolom di panel diagnostik atau pilih kolom secara manual di sidebar.")
+        st.warning("Kolom target tidak memiliki data yang cukup.")
 
 # ============================================================
-# 6. PREDIKSI PROVINSI (dengan selector provinsi + default median per provinsi)
+# 7. MENU: PREDIKSI PROVINSI
 # ============================================================
 elif menu == "🔮 Prediksi Provinsi":
-    st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
+    st.header("🔮 Prediksi Jumlah Air Bersih per Provinsi")
+    st.markdown("Masukkan indikator untuk memperkirakan jumlah air bersih yang dihasilkan provinsi.")
 
-    model_path = "model.pkl"
-    scaler_path = "scaler.pkl"
-    features_path = "features.json"
+    # Input manual berdasar fitur model
+    user_input = {}
+    for feat in features:
+        user_input[feat] = st.number_input(f"{feat}", value=0.0, step=0.1)
 
-    if not os.path.exists(model_path):
-        st.error("❌ File `model.pkl` tidak ditemukan. Pastikan file model sudah ada di folder proyek.")
-    else:
-        model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
-
-        # Detect provinsi column (auto or manual)
-        prov_candidates = ["provinsi", "province", "nama_provinsi", "kabupaten_provinsi", "region"]
-        prov_col = manual_prov if manual_prov else find_best_column(df.columns.tolist(), prov_candidates)
-        if prov_col:
-            unique_prov = df[prov_col].dropna().astype(str).unique().tolist()
-            unique_prov = sorted(unique_prov)
-        else:
-            unique_prov = []
-
-        # load features if exists; jika tidak, coba ambil numeric columns sebagai fallback
-        if os.path.exists(features_path):
-            with open(features_path, "r") as f:
-                features = json.load(f)
-        else:
-            features = df.select_dtypes(include='number').columns.tolist()
-            st.info("features.json tidak ditemukan — menggunakan kolom numerik dari dataset sebagai fitur fallback.")
-
-        st.markdown("Masukkan data indikator sesuai kebutuhan:")
-        inputs = {}
-
-        # Province selector UI
-        if prov_col and unique_prov:
-            sel_prov = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
-            if sel_prov == "-- Pilih --":
-                sel_prov = None
-        else:
-            sel_prov = None
-            st.info("Kolom provinsi tidak ditemukan di dataset — nilai default per provinsi tidak tersedia.")
-
-        # Precompute medians: global median and per-prov median if prov available
-        global_medians = {}
-        prov_medians = {}
-        for feat in features:
-            if feat in df.columns:
-                global_medians[feat] = pd.to_numeric(df[feat], errors="coerce").median(skipna=True)
-                if sel_prov:
-                    # compute per-prov median
-                    prov_medians[feat] = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce").median(skipna=True)
-                else:
-                    prov_medians[feat] = None
-            else:
-                global_medians[feat] = 0.0
-                prov_medians[feat] = None
-
-        # Render numeric inputs using per-prov median if available, else global median, else 0.0
-        for feat in features:
-            default_val = 0.0
-            if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
-                default_val = float(prov_medians[feat])
-            elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
-                default_val = float(global_medians[feat])
-            # ensure default valid
-            try:
-                default_val = float(default_val)
-            except Exception:
-                default_val = 0.0
-
-            inputs[feat] = st.number_input(f"{feat}", value=default_val, step=0.01, format="%f")
-
-        # Optional: show which provinsi used for defaults
-        if sel_prov:
-            st.caption(f"Default input diisi dengan median dari provinsi: {sel_prov} (jika tersedia di dataset).")
-
-        if st.button("Prediksi"):
-            input_df = pd.DataFrame([inputs])
-            if scaler:
-                input_scaled = scaler.transform(input_df)
-            else:
-                input_scaled = input_df
-            try:
-                pred = model.predict(input_scaled)[0]
-                st.success(f"💧 Prediksi jumlah air bersih: **{pred:.2f}**")
-                if sel_prov:
-                    st.write(f"Provinsi yang dipilih: **{sel_prov}**")
-            except Exception as e:
-                st.error(f"Terjadi error saat prediksi: {e}")
+    if st.button("Prediksi Jumlah Air Bersih"):
+        input_df = pd.DataFrame([user_input])
+        input_scaled = scaler.transform(input_df)
+        prediction = model.predict(input_scaled)[0]
+        st.success(f"💧 Prediksi Jumlah Air Bersih: *{prediction:.2f} unit*")
 
 # ============================================================
-# 7. ANALISIS FAKTOR
+# 8. MENU: ANALISIS FAKTOR
 # ============================================================
 elif menu == "📊 Analisis Faktor":
-    st.header("📊 Analisis Faktor yang Mempengaruhi Akses Air Bersih")
+    st.header("📊 Faktor yang Mempengaruhi Akses Air Bersih")
+    st.markdown("Visualisasi fitur yang paling berpengaruh dalam model Random Forest.")
 
-    model_path = "model.pkl"
-    features_path = "features.json"
-    if os.path.exists(model_path) and os.path.exists(features_path):
-        model = joblib.load(model_path)
-        with open(features_path, "r") as f:
-            features = json.load(f)
+    if hasattr(model, "feature_importances_"):
+        importance = pd.DataFrame({
+            "Fitur": features,
+            "Pentingnya": model.feature_importances_
+        }).sort_values(by="Pentingnya", ascending=False)
 
-        if hasattr(model, "feature_importances_"):
-            importance = pd.DataFrame({
-                "Fitur": features,
-                "Importance": model.feature_importances_
-            }).sort_values(by="Importance", ascending=True)  # ascending so barh displays largest on top
-
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.barh(importance["Fitur"], importance["Importance"])
-            ax.set_xlabel("Tingkat Pengaruh")
-            ax.set_ylabel("Fitur")
-            ax.set_title("Faktor Paling Berpengaruh terhadap Akses Air Bersih")
-            st.pyplot(fig)
-            st.dataframe(importance.sort_values(by="Importance", ascending=False).reset_index(drop=True))
-        else:
-            st.warning("Model tidak mendukung atribut `feature_importances_`.")
+        st.bar_chart(importance.set_index("Fitur"))
+        st.dataframe(importance)
     else:
-        st.error("❌ File model atau fitur tidak ditemukan. Pastikan `model.pkl` dan `features.json` ada jika ingin analisis faktor.")
+        st.warning("Model tidak memiliki atribut feature_importances_.")
 
 # ============================================================
-# 8. PENJELASAN AKHIR
+# 9. FOOTER
 # ============================================================
 st.markdown("---")
-st.markdown("""
-**Kesimpulan:**
-Aplikasi ini membantu pemerintah dan masyarakat untuk:
-- Menganalisis tren ketersediaan air bersih di berbagai wilayah.  
-- Memprediksi dampak kebijakan terhadap akses air bersih.  
-- Menentukan faktor penting dalam pengelolaan sumber daya air.
-
-🧩 Semua langkah mendukung pencapaian **SDG 6 - Air Bersih dan Sanitasi Layak.**
-""")
+st.caption("Aplikasi ini dikembangkan untuk mendukung *SDG 6: Air Bersih dan Sanitasi Layak* — oleh Tim Analisis Data Air Bersih Indonesia 💧")
