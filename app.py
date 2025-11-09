@@ -242,8 +242,11 @@ if menu == "📈 Tren Nasional":
 # ============================================================
 # 6. PREDIKSI PROVINSI (dengan selector provinsi + default median per provinsi)
 # ============================================================
+# ============================================================
+# 6. PREDIKSI PROVINSI (dengan selector provinsi + top-5 fitur)
+# ============================================================
 elif menu == "🔮 Prediksi Provinsi":
-    st.header("🔮 Prediksi Akses Air Bersih per Provinsi")
+    st.header("🔮 Prediksi Akses Air Bersih per Provinsi (Top-5 Indikator)")
 
     model_path = "model.pkl"
     scaler_path = "scaler.pkl"
@@ -264,73 +267,163 @@ elif menu == "🔮 Prediksi Provinsi":
         else:
             unique_prov = []
 
-        # load features if exists; jika tidak, coba ambil numeric columns sebagai fallback
+        # load features list or fallback to numeric columns
         if os.path.exists(features_path):
             with open(features_path, "r") as f:
                 features = json.load(f)
+            st.info("Memuat daftar fitur dari features.json")
         else:
             features = df.select_dtypes(include='number').columns.tolist()
             st.info("features.json tidak ditemukan — menggunakan kolom numerik dari dataset sebagai fitur fallback.")
 
-        st.markdown("Masukkan data indikator sesuai kebutuhan:")
-        inputs = {}
-
-        # Province selector UI
-        if prov_col and unique_prov:
-            sel_prov = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
-            if sel_prov == "-- Pilih --":
-                sel_prov = None
+        if not features:
+            st.error("Tidak ada fitur numerik ditemukan untuk prediksi.")
         else:
-            sel_prov = None
-            st.info("Kolom provinsi tidak ditemukan di dataset — nilai default per provinsi tidak tersedia.")
-
-        # Precompute medians: global median and per-prov median if prov available
-        global_medians = {}
-        prov_medians = {}
-        for feat in features:
-            if feat in df.columns:
-                global_medians[feat] = pd.to_numeric(df[feat], errors="coerce").median(skipna=True)
-                if sel_prov:
-                    # compute per-prov median
-                    prov_medians[feat] = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce").median(skipna=True)
+            # Compute global & per-prov medians for default values
+            global_medians = {}
+            prov_medians = {}
+            for feat in features:
+                if feat in df.columns:
+                    global_medians[feat] = pd.to_numeric(df[feat], errors="coerce").median(skipna=True)
+                    prov_medians[feat] = None  # will compute later when prov selected
                 else:
+                    global_medians[feat] = 0.0
                     prov_medians[feat] = None
+
+            st.markdown("Pilih provinsi (opsional) untuk menggunakan median per-provinsi sebagai default:")
+            if prov_col and unique_prov:
+                sel_prov = st.selectbox("Pilih Provinsi", options=["-- Pilih --"] + unique_prov)
+                if sel_prov == "-- Pilih --":
+                    sel_prov = None
             else:
-                global_medians[feat] = 0.0
-                prov_medians[feat] = None
+                sel_prov = None
+                st.info("Kolom provinsi tidak ditemukan di dataset — menggunakan median global sebagai default.")
 
-        # Render numeric inputs using per-prov median if available, else global median, else 0.0
-        for feat in features:
-            default_val = 0.0
-            if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
-                default_val = float(prov_medians[feat])
-            elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
-                default_val = float(global_medians[feat])
-            # ensure default valid
+            # If province selected, compute per-prov medians
+            if sel_prov:
+                for feat in features:
+                    if feat in df.columns:
+                        prov_vals = pd.to_numeric(df.loc[df[prov_col].astype(str) == str(sel_prov), feat], errors="coerce")
+                        prov_medians[feat] = prov_vals.median(skipna=True)
+
+            # Determine feature importances (top 5)
+            feature_importances = None
+            top_k = 5
             try:
-                default_val = float(default_val)
-            except Exception:
-                default_val = 0.0
-
-            inputs[feat] = st.number_input(f"{feat}", value=default_val, step=0.01, format="%f")
-
-        # Optional: show which provinsi used for defaults
-        if sel_prov:
-            st.caption(f"Default input diisi dengan median dari provinsi: {sel_prov} (jika tersedia di dataset).")
-
-        if st.button("Prediksi"):
-            input_df = pd.DataFrame([inputs])
-            if scaler:
-                input_scaled = scaler.transform(input_df)
-            else:
-                input_scaled = input_df
-            try:
-                pred = model.predict(input_scaled)[0]
-                st.success(f"💧 Prediksi jumlah air bersih: *{pred:.2f}*")
-                if sel_prov:
-                    st.write(f"Provinsi yang dipilih: *{sel_prov}*")
+                if hasattr(model, "feature_importances_"):
+                    fi = model.feature_importances_
+                    # If model was trained with features order saved in features.json, assume same order
+                    if len(fi) == len(features):
+                        feature_importances = dict(zip(features, fi))
+                    else:
+                        # Try to align by checking names if model stores feature names (sklearn >=1.0 sometimes)
+                        feature_importances = {}
+                        for i, f in enumerate(features):
+                            # fallback: assign 0 for mismatch lengths
+                            feature_importances[f] = float(fi[i]) if i < len(fi) else 0.0
+                else:
+                    # no feature_importances_ attribute
+                    feature_importances = {f: 0.0 for f in features}
+                    st.warning("Model tidak memiliki attribute feature_importances_. Menampilkan 0 untuk semua fitur.")
             except Exception as e:
-                st.error(f"Terjadi error saat prediksi: {e}")
+                feature_importances = {f: 0.0 for f in features}
+                st.warning(f"Gagal membaca feature importances dari model: {e}")
+
+            # Get top-k features by importance
+            sorted_feats = sorted(feature_importances.items(), key=lambda x: x[1], reverse=True)
+            top_feats = [f for f, _ in sorted_feats[:top_k]]
+
+            st.subheader("Top-5 Indikator (Feature Importance)")
+            df_fi = pd.DataFrame(sorted_feats[:top_k], columns=["feature", "importance"])
+            st.dataframe(df_fi.style.format({"importance": "{:.4f}"}), use_container_width=True)
+
+            # Show bar chart for top-5 importances
+            try:
+                st.bar_chart(df_fi.set_index("feature")["importance"])
+            except Exception:
+                # fallback matplotlib
+                fig_fi, ax_fi = plt.subplots(figsize=(6, 3))
+                ax_fi.bar(df_fi["feature"], df_fi["importance"])
+                ax_fi.set_ylabel("Importance")
+                ax_fi.set_title("Top-5 Feature Importances")
+                plt.xticks(rotation=45, ha="right")
+                st.pyplot(fig_fi, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("Masukkan nilai indikator untuk **Top-5 fitur** berikut (nilai default: median provinsi / median global):")
+
+            # Render inputs only for top 5 features
+            user_inputs = {}
+            for feat in top_feats:
+                default_val = 0.0
+                if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)):
+                    default_val = float(prov_medians.get(feat))
+                elif global_medians.get(feat) is not None and not pd.isna(global_medians.get(feat)):
+                    default_val = float(global_medians.get(feat))
+                try:
+                    default_val = float(default_val)
+                except Exception:
+                    default_val = 0.0
+
+                user_inputs[feat] = st.number_input(f"{feat}", value=default_val, step=0.01, format="%f")
+
+            st.markdown("Jika beberapa fitur lain tidak tersedia, sistem akan mengisi otomatis dengan median (provinsi atau global).")
+
+            if st.button("Prediksi (Provinsi)"):
+                # Build full feature vector in the same order as `features`
+                input_vector = {}
+                for feat in features:
+                    if feat in user_inputs:
+                        input_vector[feat] = float(user_inputs[feat])
+                    else:
+                        # use prov median if available, else global median, else 0
+                        val = prov_medians.get(feat) if prov_medians.get(feat) is not None and not pd.isna(prov_medians.get(feat)) else global_medians.get(feat)
+                        try:
+                            input_vector[feat] = float(val)
+                        except Exception:
+                            input_vector[feat] = 0.0
+
+                input_df = pd.DataFrame([input_vector], columns=features)
+
+                # Scale if scaler present
+                try:
+                    if scaler is not None:
+                        input_scaled = scaler.transform(input_df)
+                    else:
+                        input_scaled = input_df.values
+                except Exception as e:
+                    st.warning(f"Terjadi masalah saat skalasi input: {e}. Mengirimkan input tanpa skala.")
+                    input_scaled = input_df.values
+
+                # Predict
+                try:
+                    pred = model.predict(input_scaled)[0]
+                    st.success(f"💧 Prediksi jumlah akses air bersih (provinsi{': ' + sel_prov if sel_prov else ''}): **{pred:.2f}**")
+                    # Show breakdown: show top-5 inputs and their importance as reference
+                    st.subheader("Input (Top-5 Indikator) dan Nilai Default/Anda")
+                    df_inputs_show = pd.DataFrame({
+                        "feature": top_feats,
+                        "value": [input_vector[f] for f in top_feats],
+                        "importance": [feature_importances.get(f, 0.0) for f in top_feats]
+                    })
+                    st.dataframe(df_inputs_show.style.format({"value": "{:.3f}", "importance": "{:.4f}"}), use_container_width=True)
+
+                    # Show visual: bar chart of top-5 importances alongside user values (normalized for plotting)
+                    fig2, ax2 = plt.subplots(nrows=1, ncols=2, figsize=(10, 3))
+                    # importance plot
+                    ax2[0].bar(df_inputs_show["feature"], df_inputs_show["importance"])
+                    ax2[0].set_title("Top-5 Importances")
+                    ax2[0].tick_params(axis='x', rotation=45)
+                    # values plot
+                    ax2[1].bar(df_inputs_show["feature"], df_inputs_show["value"])
+                    ax2[1].set_title("Nilai Input (Top-5)")
+                    ax2[1].tick_params(axis='x', rotation=45)
+                    plt.tight_layout()
+                    st.pyplot(fig2, use_container_width=True)
+
+                except Exception as e:
+                    st.error(f"Terjadi error saat prediksi: {e}")
+
 
 # ====
 
