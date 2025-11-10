@@ -214,9 +214,11 @@ else:
     y_pred = m * forecast_years + b
 
 
-            # Tahun prediksi: 2024 s.d. 2028
-            forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
-            y_pred = m * forecast_years + b
+            
+# Tentukan rentang forecast
+start_forecast_year = df_nat[year_col].max() + 1
+forecast_horizon = 5
+forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
 
             # Dataframe prediksi
             df_forecast = pd.DataFrame({
