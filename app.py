@@ -181,44 +181,14 @@ if menu == "📈 Tren Nasional":
                 y_mean = np.nanmean(y)
                 forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
                 y_pred = np.full_like(forecast_years, fill_value=y_mean, dtype=float)
-          # ============ Gunakan Model ML untuk Prediksi Tren Nasional ============
-model_path = "model.pkl"
-scaler_path = "scaler.pkl"
+            else:
+                # Regresi linear sederhana (polyfit degree=1)
+                coeffs = np.polyfit(X, y, deg=1)
+                m, b = coeffs[0], coeffs[1]
 
-if os.path.exists(model_path):
-    model_nat = joblib.load(model_path)
-    scaler_nat = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
-
-    # Siapkan dataframe forecast_years
-    df_forecast = pd.DataFrame({year_col: forecast_years})
-
-    # Ambil fitur lain yang dibutuhkan model
-    # Fitur akan diisi median nasional (karena tren nasional tidak spesifik provinsi)
-    for feat in features:
-        if feat in df.columns:
-            df_forecast[feat] = df[feat].median()
-        else:
-            df_forecast[feat] = 0.0
-
-    # Scale jika scaler ada
-    if scaler_nat is not None:
-        X_forecast = scaler_nat.transform(df_forecast[features])
-    else:
-        X_forecast = df_forecast[features].values
-
-    # Prediksi langsung dari model
-    y_pred = model_nat.predict(X_forecast)
-
-else:
-    # fallback kalau model tidak ada → tetap pakai polyfit lama
-    y_pred = m * forecast_years + b
-
-
-            
-# Tentukan rentang forecast
-start_forecast_year = df_nat[year_col].max() + 1
-forecast_horizon = 5
-forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                # Tahun prediksi: 2024 s.d. 2028
+                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                y_pred = m * forecast_years + b
 
             # Dataframe prediksi
             df_forecast = pd.DataFrame({
