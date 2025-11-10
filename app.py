@@ -214,9 +214,9 @@ else:
     y_pred = m * forecast_years + b
 
 
-                # Tahun prediksi: 2024 s.d. 2028
-                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
-                y_pred = m * forecast_years + b
+            # Tahun prediksi: 2024 s.d. 2028
+            forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+            y_pred = m * forecast_years + b
 
             # Dataframe prediksi
             df_forecast = pd.DataFrame({
