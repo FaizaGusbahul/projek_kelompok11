@@ -123,87 +123,120 @@ manual_prov = st.sidebar.selectbox("Pilih kolom Provinsi (optional)", options=[N
 # ============================================================
 # 5. TREND NASIONAL
 # ============================================================
-# ====================== PREDIKSI TREN NASIONAL ======================
+if menu == "📈 Tren Nasional":
+    st.header("📈 Tren Nasional Akses Air Bersih")
 
-st.subheader("📈 Prediksi Tren Nasional")
+    # kandidat nama kolom (dalam bentuk normalized)
+    year_candidates = ["tahun", "year", "tahun_berdasarkan", "tahun_akses"]
+    water_candidates = [
+        "air_bersih", "airbersih", "access_to_clean_water", "clean_water", "persentase_air_bersih",
+        "percent_access", "presentase_air_bersih", "akses_air_bersih", "persen_air_bersih"
+    ]
 
-# Kolom tahun dalam dataset
-year_col = "Tahun"
+    # gunakan manual jika user memilih
+    year_col = manual_year if manual_year else find_best_column(df.columns.tolist(), year_candidates)
+    water_col = manual_water if manual_water else find_best_column(df.columns.tolist(), water_candidates)
 
-# Ambil data nasional per tahun (agregasi rata-rata / total, sesuaikan kebutuhan)
-df_nat = df.groupby(year_col)[target_column].mean().reset_index()
+    st.write("Deteksi kolom -> tahun:", year_col, ", air_bersih:", water_col)
 
-# Tentukan rentang forecast
-start_forecast_year = df_nat[year_col].max() + 1
-forecast_horizon = 5
-forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+    if year_col and water_col:
+        # Bersihkan kolom tahun: ambil digit (misal '2020' dari string)
+        try:
+            df[year_col] = pd.to_numeric(df[year_col].astype(str).str.replace(r"\D+", "", regex=True), errors="coerce")
+        except Exception:
+            pass
 
-# Polyfit fallback (jaga-jaga kalau model tidak ditemukan)
-X = df_nat[year_col].values
-y = df_nat[target_column].values
-coeffs = np.polyfit(X, y, deg=1)
-m, b = coeffs[0], coeffs[1]
-fallback_pred = m * forecast_years + b
+        # Bersihkan kolom air bersih jadi numeric
+        df[water_col] = clean_numeric_series(df[water_col])
 
-# Path model
-model_path = "model.pkl"
-scaler_path = "scaler.pkl"
-features_path = "features.json"
+        # Agregasi mean nasional per tahun
+        df_year = df.groupby(year_col)[water_col].mean().reset_index().dropna()
 
-# Coba gunakan model ML jika tersedia
-if os.path.exists(model_path) and os.path.exists(features_path):
-    model_nat = joblib.load(model_path)
-    scaler_nat = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
-
-    # Ambil daftar fitur
-    with open(features_path, "r") as f:
-        features = json.load(f)
-
-    # Siapkan dataframe prediksi nasional
-    df_forecast = pd.DataFrame({year_col: forecast_years})
-
-    # Isi fitur lain menggunakan median nasional
-    for feat in features:
-        if feat == year_col:
-            continue  # sudah ada
-        if feat in df.columns:
-            df_forecast[feat] = df[feat].median()
+        if df_year.empty:
+            st.warning("Data tahun / air_bersih ada tetapi hasil agregasi kosong (cek nilai kosong atau format).")
         else:
-            df_forecast[feat] = 0.0  # fallback nilai default
+            # Sort by year
+            try:
+                df_year = df_year.sort_values(by=year_col)
+            except Exception:
+                pass
 
-    # Ambil nilai fitur final
-    if scaler_nat is not None:
-        X_forecast = scaler_nat.transform(df_forecast[features])
+            # ====== PARAMETER PREDIKSI ======
+            start_forecast_year = 2024
+            forecast_horizon = 5  # 2024-2028
+
+            # Ambil data historis sebelum tahun awal prediksi (supaya prediksi benar-benar 'mulai 2024')
+            hist = df_year[df_year[year_col] < start_forecast_year].copy()
+            if hist.empty:
+                # Jika tidak ada data < 2024, gunakan semua data historis
+                hist = df_year.copy()
+
+            # Siapkan X (tahun) dan y (nilai air bersih) untuk regresi
+            X = hist[year_col].values.astype(float)
+            y = hist[water_col].values.astype(float)
+
+            # Jika data historis minim (misal 1 titik), fallback: pakai rata-rata flat
+            if len(X) < 2:
+                st.info("Data historis terlalu sedikit untuk regresi. Menggunakan nilai rata-rata sebagai prediksi datar.")
+                y_mean = np.nanmean(y)
+                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                y_pred = np.full_like(forecast_years, fill_value=y_mean, dtype=float)
+            else:
+                # Regresi linear sederhana (polyfit degree=1)
+                coeffs = np.polyfit(X, y, deg=1)
+                m, b = coeffs[0], coeffs[1]
+
+                # Tahun prediksi: 2024 s.d. 2028
+                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                y_pred = m * forecast_years + b
+
+            # Dataframe prediksi
+            df_forecast = pd.DataFrame({
+                year_col: forecast_years,
+                water_col: y_pred
+            })
+
+            # Gabung histori + prediksi (untuk tabel/visual)
+            df_all = pd.concat([
+                df_year.assign(_type="Historis"),
+                df_forecast.assign(_type="Prediksi")
+            ], ignore_index=True)
+
+            # ----- Visualisasi dengan Matplotlib supaya garis historis & prediksi bisa dibedakan -----
+            fig, ax = plt.subplots(figsize=(10, 5))
+            # Plot historis (semua tahun yang tersedia)
+            ax.plot(
+                df_year[year_col], df_year[water_col],
+                marker="o", linewidth=2, label="Historis"
+            )
+            # Plot prediksi 2024-2028
+            ax.plot(
+                df_forecast[year_col], df_forecast[water_col],
+                marker="o", linestyle="--", linewidth=2, label="Prediksi (2024–2028)"
+            )
+            ax.set_xlabel("Tahun")
+            ax.set_ylabel("Rata-rata Akses Air Bersih")
+            ax.set_title("Tren Nasional & Prediksi 5 Tahun ke Depan (mulai 2024)")
+            ax.legend()
+            ax.grid(True, linestyle=":", alpha=0.4)
+            st.pyplot(fig, use_container_width=True)
+
+            # Tabel ringkas prediksi
+            st.subheader("📅 Prediksi 5 Tahun (Mulai 2024)")
+            st.dataframe(
+                df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(2),
+                use_container_width=True
+            )
+
+            # Catatan metode
+            st.caption(
+                "Metode: Regresi linear pada data historis sebelum 2024. "
+                "Jika data < 2 titik, prediksi datar memakai rata-rata historis. "
+                "Silakan sesuaikan metode bila diperlukan."
+            )
+
     else:
-        X_forecast = df_forecast[features].values
-
-    y_pred = model_nat.predict(X_forecast)
-
-else:
-    # Jika tidak ada model -> pakai polyfit
-    y_pred = fallback_pred
-
-
-# Gabungkan data aktual & prediksi
-df_pred_nat = pd.DataFrame({
-    year_col: np.concatenate([df_nat[year_col].values, forecast_years]),
-    target_column: np.concatenate([df_nat[target_column].values, y_pred]),
-    "Jenis": ["Aktual"] * len(df_nat) + ["Prediksi"] * len(forecast_years)
-})
-
-# Grafik
-fig_nat = px.line(
-    df_pred_nat,
-    x=year_col,
-    y=target_column,
-    color="Jenis",
-    title="Tren Nasional: Aktual vs Prediksi",
-    markers=True
-)
-st.plotly_chart(fig_nat, use_container_width=True)
-
-# ====================== END PREDIKSI TREN NASIONAL ======================
-
+        st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
 
 
 
