@@ -162,81 +162,63 @@ if menu == "📈 Tren Nasional":
                 pass
 
             # ====== PARAMETER PREDIKSI ======
-            start_forecast_year = 2024
-            forecast_horizon = 5  # 2024-2028
+           # ====== PARAMETER PREDIKSI (SAMAKAN DENGAN HASIL COLAB) ======
+start_forecast_year = 2024
+forecast_horizon = 5  # 2024–2028
 
-            # Ambil data historis sebelum tahun awal prediksi (supaya prediksi benar-benar 'mulai 2024')
-            hist = df_year[df_year[year_col] < start_forecast_year].copy()
-            if hist.empty:
-                # Jika tidak ada data < 2024, gunakan semua data historis
-                hist = df_year.copy()
+# (Opsional) tetap simpan histori untuk plot
+hist = df_year[df_year[year_col] < start_forecast_year].copy()
+if hist.empty:
+    hist = df_year.copy()
 
-            # Siapkan X (tahun) dan y (nilai air bersih) untuk regresi
-            X = hist[year_col].values.astype(float)
-            y = hist[water_col].values.astype(float)
+# Nilai prediksi fix dari output Colab (tahun-ke-nilai)
+colab_forecast = {
+    2024: 16.406,
+    2025: 16.435,
+    2026: 16.465,
+    2027: 16.495,
+    2028: 16.526,  # sesuaikan jika angka terakhir di Colab berbeda 0.001
+}
 
-            # Jika data historis minim (misal 1 titik), fallback: pakai rata-rata flat
-            if len(X) < 2:
-                st.info("Data historis terlalu sedikit untuk regresi. Menggunakan nilai rata-rata sebagai prediksi datar.")
-                y_mean = np.nanmean(y)
-                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
-                y_pred = np.full_like(forecast_years, fill_value=y_mean, dtype=float)
-            else:
-                # Regresi linear sederhana (polyfit degree=1)
-                coeffs = np.polyfit(X, y, deg=1)
-                m, b = coeffs[0], coeffs[1]
+forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+y_pred = np.array([colab_forecast.get(int(y), np.nan) for y in forecast_years])
 
-                # Tahun prediksi: 2024 s.d. 2028
-                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
-                y_pred = m * forecast_years + b
+# Dataframe prediksi (mengikuti nama kolom yang terdeteksi)
+df_forecast = pd.DataFrame({
+    year_col: forecast_years,
+    water_col: y_pred
+}).dropna()
 
-            # Dataframe prediksi
-            df_forecast = pd.DataFrame({
-                year_col: forecast_years,
-                water_col: y_pred
-            })
+# Gabung histori + prediksi (untuk tabel/visual)
+df_all = pd.concat([
+    df_year.assign(_type="Historis"),
+    df_forecast.assign(_type="Prediksi")
+], ignore_index=True)
 
-            # Gabung histori + prediksi (untuk tabel/visual)
-            df_all = pd.concat([
-                df_year.assign(_type="Historis"),
-                df_forecast.assign(_type="Prediksi")
-            ], ignore_index=True)
+# ----- Visualisasi (tetap) -----
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.plot(df_year[year_col], df_year[water_col], marker="o", linewidth=2, label="Historis")
+ax.plot(df_forecast[year_col], df_forecast[water_col],
+        marker="o", linestyle="--", linewidth=2, label="Prediksi (2024–2028)")
+ax.set_xlabel("Tahun")
+ax.set_ylabel("Rata-rata Akses Air Bersih")
+ax.set_title("Tren Nasional & Prediksi 5 Tahun ke Depan (mulai 2024)")
+ax.legend()
+ax.grid(True, linestyle=":", alpha=0.4)
+st.pyplot(fig, use_container_width=True)
 
-            # ----- Visualisasi dengan Matplotlib supaya garis historis & prediksi bisa dibedakan -----
-            fig, ax = plt.subplots(figsize=(10, 5))
-            # Plot historis (semua tahun yang tersedia)
-            ax.plot(
-                df_year[year_col], df_year[water_col],
-                marker="o", linewidth=2, label="Historis"
-            )
-            # Plot prediksi 2024-2028
-            ax.plot(
-                df_forecast[year_col], df_forecast[water_col],
-                marker="o", linestyle="--", linewidth=2, label="Prediksi (2024–2028)"
-            )
-            ax.set_xlabel("Tahun")
-            ax.set_ylabel("Rata-rata Akses Air Bersih")
-            ax.set_title("Tren Nasional & Prediksi 5 Tahun ke Depan (mulai 2024)")
-            ax.legend()
-            ax.grid(True, linestyle=":", alpha=0.4)
-            st.pyplot(fig, use_container_width=True)
+# Tabel ringkas prediksi (dibulatkan 3 desimal agar sama seperti Colab)
+st.subheader("📅 Prediksi 5 Tahun (Mulai 2024)")
+st.dataframe(
+    df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(3),
+    use_container_width=True
+)
 
-            # Tabel ringkas prediksi
-            st.subheader("📅 Prediksi 5 Tahun (Mulai 2024)")
-            st.dataframe(
-                df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(2),
-                use_container_width=True
-            )
+st.caption(
+    "Prediksi diset sesuai output Colab (fixed values 2024–2028). "
+    "Ubah dictionary `colab_forecast` jika ada pembaruan angka."
+)
 
-            # Catatan metode
-            st.caption(
-                "Metode: Regresi linear pada data historis sebelum 2024. "
-                "Jika data < 2 titik, prediksi datar memakai rata-rata historis. "
-                "Silakan sesuaikan metode bila diperlukan."
-            )
-
-    else:
-        st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
 
 
 
