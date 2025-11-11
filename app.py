@@ -130,7 +130,7 @@ if menu == "📈 Tren Nasional":
     year_candidates = ["tahun", "year", "tahun_berdasarkan", "tahun_akses"]
     water_candidates = [
         "air_bersih", "airbersih", "access_to_clean_water", "clean_water", "persentase_air_bersih",
-        "percent_access", "presentase_air_bersih", "akses_air_bersih", "persen_air_bersih"
+        "percent_access", "presentase_air_bersih", "akses_air_bersih", "persen_air_bersih", "jumlah_air_bersih"
     ]
 
     # gunakan manual jika user memilih
@@ -139,81 +139,139 @@ if menu == "📈 Tren Nasional":
 
     st.write("Deteksi kolom -> tahun:", year_col, ", air_bersih:", water_col)
 
-    if year_col and water_col:
-        # Bersihkan kolom tahun: ambil digit (misal '2020' dari string)
+    if not (year_col and water_col):
+        st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
+    else:
+        # bersihkan dan siapkan data
         try:
             df[year_col] = pd.to_numeric(df[year_col].astype(str).str.replace(r"\D+", "", regex=True), errors="coerce")
         except Exception:
             pass
-
-        # Bersihkan kolom air bersih jadi numeric
         df[water_col] = clean_numeric_series(df[water_col])
-
-        # Agregasi mean nasional per tahun
         df_year = df.groupby(year_col)[water_col].mean().reset_index().dropna()
-
         if df_year.empty:
             st.warning("Data tahun / air_bersih ada tetapi hasil agregasi kosong (cek nilai kosong atau format).")
         else:
-            # Sort by year
             try:
                 df_year = df_year.sort_values(by=year_col)
             except Exception:
                 pass
 
-            # ====== PARAMETER PREDIKSI ======
+            # opsi prediksi untuk atasi perbedaan antara deploy/colab
+            st.markdown("**Opsi metode prediksi** — pilih pendekatan yang sesuai dengan data kamu:")
+            method = st.selectbox("Metode prediksi", options=[
+                "Linear (semua historis)",
+                "Linear (last N years)",
+                "Robust (hapus outlier lalu linear)",
+                "Polynomial degree 2"
+            ])
+
             start_forecast_year = 2024
             forecast_horizon = 5  # 2024-2028
 
-            # Ambil data historis sebelum tahun awal prediksi (supaya prediksi benar-benar 'mulai 2024')
-            hist = df_year[df_year[year_col] < start_forecast_year].copy()
-            if hist.empty:
-                # Jika tidak ada data < 2024, gunakan semua data historis
-                hist = df_year.copy()
+            # Pilihan untuk last N
+            last_n = None
+            if method == "Linear (last N years)":
+                max_n = min(10, df_year.shape[0])
+                last_n = st.slider("Gunakan berapa tahun terakhir untuk fitting?", min_value=2, max_value=max(2, max_n), value=min(5, max_n))
 
-            # Siapkan X (tahun) dan y (nilai air bersih) untuk regresi
+            # Prepare historical data to fit (only years < start_forecast_year ideally)
+            hist_all = df_year[df_year[year_col] < start_forecast_year].copy()
+            if hist_all.empty:
+                # jika tidak ada < 2024, gunakan semua available (fallback)
+                hist_all = df_year.copy()
+
+            hist = hist_all.copy()
+
+            # If using last N: pick last N rows by year
+            if last_n is not None:
+                hist = hist.sort_values(by=year_col).tail(last_n).copy()
+                st.caption(f"Fitting menggunakan {last_n} tahun terakhir: {hist[year_col].tolist()}")
+
             X = hist[year_col].values.astype(float)
             y = hist[water_col].values.astype(float)
 
-            # Jika data historis minim (misal 1 titik), fallback: pakai rata-rata flat
-            if len(X) < 2:
-                st.info("Data historis terlalu sedikit untuk regresi. Menggunakan nilai rata-rata sebagai prediksi datar.")
-                y_mean = np.nanmean(y)
-                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
-                y_pred = np.full_like(forecast_years, fill_value=y_mean, dtype=float)
-            else:
-                # Regresi linear sederhana (polyfit degree=1)
-                coeffs = np.polyfit(X, y, deg=1)
+            # helper: fit linear and return slope/intercept and predictions
+            def fit_linear_and_forecast(X_arr, y_arr):
+                coeffs = np.polyfit(X_arr, y_arr, deg=1)
                 m, b = coeffs[0], coeffs[1]
+                years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                y_pred = m * years + b
+                return {"m": float(m), "b": float(b), "years": years, "y_pred": y_pred}
 
-                # Tahun prediksi: 2024 s.d. 2028
-                forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
-                y_pred = m * forecast_years + b
+            # robust: initial fit -> compute residuals -> remove outliers by IQR -> refit
+            if method == "Robust (hapus outlier lalu linear)":
+                if len(X) < 2:
+                    st.info("Data historis kurang dari 2 titik; menggunakan rata-rata sebagai prediksi.")
+                    y_mean = np.nanmean(y) if len(y) > 0 else 0.0
+                    years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                    y_pred = np.full_like(years, fill_value=y_mean, dtype=float)
+                    model_info = {"method": "flat_mean", "mean": float(y_mean)}
+                else:
+                    # initial fit
+                    init = np.polyfit(X, y, deg=1)
+                    y_init_pred = init[0] * X + init[1]
+                    residuals = y - y_init_pred
+                    # detect outliers by IQR on residuals
+                    q1 = np.percentile(residuals, 25)
+                    q3 = np.percentile(residuals, 75)
+                    iqr = q3 - q1
+                    lower = q1 - 1.5 * iqr
+                    upper = q3 + 1.5 * iqr
+                    mask = (residuals >= lower) & (residuals <= upper)
+                    removed_years = X[~mask].tolist()
+                    kept_years = X[mask].tolist()
+                    if sum(mask) < 2:
+                        # jika terlalu sedikit after removal, fallback ke initial
+                        st.warning("Penghapusan outlier mengurangi titik terlalu banyak; memakai fit awal.")
+                        model_fit = init
+                    else:
+                        model_fit = np.polyfit(X[mask], y[mask], deg=1)
+                    m, b = float(model_fit[0]), float(model_fit[1])
+                    years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                    y_pred = m * years + b
+                    model_info = {"method": "robust_linear", "slope": m, "intercept": b, "removed_years": removed_years, "kept_years": kept_years}
 
-            # Dataframe prediksi
-            df_forecast = pd.DataFrame({
-                year_col: forecast_years,
-                water_col: y_pred
-            })
+            elif method == "Polynomial degree 2":
+                if len(X) < 3:
+                    st.info("Data kurang untuk polynomial degree 2; fallback ke linear.")
+                    res = fit_linear_and_forecast(X, y)
+                    model_info = {"method": "linear_fallback", "m": res["m"], "b": res["b"]}
+                    years = res["years"]; y_pred = res["y_pred"]
+                else:
+                    p = np.polyfit(X, y, deg=2)
+                    years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                    # evaluate polynomial
+                    y_pred = np.polyval(p, years)
+                    model_info = {"method": "poly2", "coeffs": p.tolist()}
+            else:  # Linear (semua historis) or Linear (last N chosen)
+                if len(X) < 2:
+                    st.info("Data historis terlalu sedikit untuk regresi. Menggunakan nilai rata-rata sebagai prediksi datar.")
+                    y_mean = np.nanmean(y) if len(y) > 0 else 0.0
+                    years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
+                    y_pred = np.full_like(years, fill_value=y_mean, dtype=float)
+                    model_info = {"method": "flat_mean", "mean": float(y_mean)}
+                else:
+                    res = fit_linear_and_forecast(X, y)
+                    years = res["years"]; y_pred = res["y_pred"]
+                    model_info = {"method": "linear", "m": res["m"], "b": res["b"]}
 
-            # Gabung histori + prediksi (untuk tabel/visual)
-            df_all = pd.concat([
-                df_year.assign(_type="Historis"),
-                df_forecast.assign(_type="Prediksi")
-            ], ignore_index=True)
+            # Build forecast df and combine for plot
+            df_forecast = pd.DataFrame({year_col: years, water_col: y_pred})
+            df_all = pd.concat([df_year.assign(_type="Historis"), df_forecast.assign(_type="Prediksi")], ignore_index=True)
 
-            # ----- Visualisasi dengan Matplotlib supaya garis historis & prediksi bisa dibedakan -----
+            # If robust, show removed years info
+            if method == "Robust (hapus outlier lalu linear)" and isinstance(model_info, dict):
+                removed = model_info.get("removed_years", [])
+                if removed:
+                    st.info(f"Outlier dihapus dari fitting: {removed}. Model slope={model_info.get('slope'):.4f}, intercept={model_info.get('intercept'):.3f}")
+                else:
+                    st.caption("Tidak ada outlier yang dihapus; fitting serupa dengan linear biasa.")
+
+            # Plot historis + prediksi
             fig, ax = plt.subplots(figsize=(10, 5))
-            # Plot historis (semua tahun yang tersedia)
-            ax.plot(
-                df_year[year_col], df_year[water_col],
-                marker="o", linewidth=2, label="Historis"
-            )
-            # Plot prediksi 2024-2028
-            ax.plot(
-                df_forecast[year_col], df_forecast[water_col],
-                marker="o", linestyle="--", linewidth=2, label="Prediksi (2024–2028)"
-            )
+            ax.plot(df_year[year_col], df_year[water_col], marker="o", linewidth=2, label="Historis")
+            ax.plot(df_forecast[year_col], df_forecast[water_col], marker="o", linestyle="--", linewidth=2, label=f"Prediksi (2024–2028) — {method}")
             ax.set_xlabel("Tahun")
             ax.set_ylabel("Rata-rata Akses Air Bersih")
             ax.set_title("Tren Nasional & Prediksi 5 Tahun ke Depan (mulai 2024)")
@@ -221,22 +279,15 @@ if menu == "📈 Tren Nasional":
             ax.grid(True, linestyle=":", alpha=0.4)
             st.pyplot(fig, use_container_width=True)
 
-            # Tabel ringkas prediksi
+            # show forecast table
             st.subheader("📅 Prediksi 5 Tahun (Mulai 2024)")
-            st.dataframe(
-                df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(2),
-                use_container_width=True
-            )
+            st.dataframe(df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(3), use_container_width=True)
 
-            # Catatan metode
-            st.caption(
-                "Metode: Regresi linear pada data historis sebelum 2024. "
-                "Jika data < 2 titik, prediksi datar memakai rata-rata historis. "
-                "Silakan sesuaikan metode bila diperlukan."
-            )
+            # show model info
+            st.markdown("**Informasi model prediksi:**")
+            st.write(model_info)
+            st.caption("Catatan: pilih metode yang paling masuk akal menurut konteks data. Jika ada tahun anomali (mis. bencana, data outlier), pilih 'Robust' atau 'Linear (last N years)'.")
 
-    else:
-        st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
 
 
 
