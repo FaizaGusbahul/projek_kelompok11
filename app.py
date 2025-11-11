@@ -15,7 +15,7 @@ st.set_page_config(page_title="Analisis Akses Air Bersih", layout="wide", page_i
 st.title("💧 Analisis dan Prediksi Akses Air Bersih di Indonesia")
 
 st.markdown("""
-Aplikasi ini dibuat untuk mendukung SDG 6: Air Bersih dan Sanitasi Layak.  
+Aplikasi ini dibuat untuk mendukung *SDG 6: Air Bersih dan Sanitasi Layak*.  
 Kamu dapat mengunggah dataset baru atau menggunakan dataset bawaan untuk:
 - 📊 Melihat tren dan analisis akses air bersih.  
 - 🤖 Melakukan prediksi menggunakan model machine learning (Random Forest).  
@@ -130,7 +130,7 @@ if menu == "📈 Tren Nasional":
     year_candidates = ["tahun", "year", "tahun_berdasarkan", "tahun_akses"]
     water_candidates = [
         "air_bersih", "airbersih", "access_to_clean_water", "clean_water", "persentase_air_bersih",
-        "percent_access", "presentase_air_bersih", "akses_air_bersih", "persen_air_bersih", "jumlah_air_bersih"
+        "percent_access", "presentase_air_bersih", "akses_air_bersih", "persen_air_bersih"
     ]
 
     # gunakan manual jika user memilih
@@ -139,95 +139,104 @@ if menu == "📈 Tren Nasional":
 
     st.write("Deteksi kolom -> tahun:", year_col, ", air_bersih:", water_col)
 
-    if not (year_col and water_col):
-        st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
-    else:
-        # cleaning
+    if year_col and water_col:
+        # Bersihkan kolom tahun: ambil digit (misal '2020' dari string)
         try:
             df[year_col] = pd.to_numeric(df[year_col].astype(str).str.replace(r"\D+", "", regex=True), errors="coerce")
         except Exception:
             pass
+
+        # Bersihkan kolom air bersih jadi numeric
         df[water_col] = clean_numeric_series(df[water_col])
 
-        # aggregate mean per year
+        # Agregasi mean nasional per tahun
         df_year = df.groupby(year_col)[water_col].mean().reset_index().dropna()
+
         if df_year.empty:
             st.warning("Data tahun / air_bersih ada tetapi hasil agregasi kosong (cek nilai kosong atau format).")
         else:
-            df_year = df_year.sort_values(by=year_col)
+            # Sort by year
+            try:
+                df_year = df_year.sort_values(by=year_col)
+            except Exception:
+                pass
 
-            # pilih data historis untuk fitting: idealnya tahun < 2024
+            # ====== PARAMETER PREDIKSI ======
             start_forecast_year = 2024
-            forecast_horizon = 5  # 2024..2028
+            forecast_horizon = 5  # 2024-2028
 
+            # Ambil data historis sebelum tahun awal prediksi (supaya prediksi benar-benar 'mulai 2024')
             hist = df_year[df_year[year_col] < start_forecast_year].copy()
             if hist.empty:
+                # Jika tidak ada data < 2024, gunakan semua data historis
                 hist = df_year.copy()
 
+            # Siapkan X (tahun) dan y (nilai air bersih) untuk regresi
             X = hist[year_col].values.astype(float)
             y = hist[water_col].values.astype(float)
 
-            # jika kurang dari 2 titik, gunakan rata-rata (fallback)
+            # Jika data historis minim (misal 1 titik), fallback: pakai rata-rata flat
             if len(X) < 2:
-                y_mean = np.nanmean(y) if len(y) > 0 else 0.0
+                st.info("Data historis terlalu sedikit untuk regresi. Menggunakan nilai rata-rata sebagai prediksi datar.")
+                y_mean = np.nanmean(y)
                 forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
                 y_pred = np.full_like(forecast_years, fill_value=y_mean, dtype=float)
             else:
-                # fit linear
-                m, b = np.polyfit(X, y, deg=1)
+                # Regresi linear sederhana (polyfit degree=1)
+                coeffs = np.polyfit(X, y, deg=1)
+                m, b = coeffs[0], coeffs[1]
+
+                # Tahun prediksi: 2024 s.d. 2028
                 forecast_years = np.arange(start_forecast_year, start_forecast_year + forecast_horizon)
                 y_pred = m * forecast_years + b
 
-            # convert years to datetime (Jan 1) and localize to UTC to match Colab display
-            def years_to_index(years):
-                idx = pd.to_datetime([f"{int(y)}-01-01" for y in years])
-                idx = idx.tz_localize("UTC")
-                return idx
+            # Dataframe prediksi
+            df_forecast = pd.DataFrame({
+                year_col: forecast_years,
+                water_col: y_pred
+            })
 
-            hist_idx = years_to_index(df_year[year_col].astype(int).values)
-            hist_values = df_year[water_col].values
+            # Gabung histori + prediksi (untuk tabel/visual)
+            df_all = pd.concat([
+                df_year.assign(_type="Historis"),
+                df_forecast.assign(_type="Prediksi")
+            ], ignore_index=True)
 
-            forecast_idx = years_to_index(forecast_years)
-            forecast_values = y_pred
-
-            # plot like colab
+            # ----- Visualisasi dengan Matplotlib supaya garis historis & prediksi bisa dibedakan -----
             fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(hist_idx, hist_values, marker='o', linewidth=2, label="Aktual")
-            ax.plot(forecast_idx, forecast_values, marker='o', linestyle='--', linewidth=2, label="Forecast")
+            # Plot historis (semua tahun yang tersedia)
+            ax.plot(
+                df_year[year_col], df_year[water_col],
+                marker="o", linewidth=2, label="Historis"
+            )
+            # Plot prediksi 2024-2028
+            ax.plot(
+                df_forecast[year_col], df_forecast[water_col],
+                marker="o", linestyle="--", linewidth=2, label="Prediksi (2024–2028)"
+            )
             ax.set_xlabel("Tahun")
-            ax.set_ylabel("Jumlah Air Bersih (rata-rata)")
-            ax.set_title("Prediksi Tren Jumlah Air Bersih (5 Tahun ke Depan)")
+            ax.set_ylabel("Rata-rata Akses Air Bersih")
+            ax.set_title("Tren Nasional & Prediksi 5 Tahun ke Depan (mulai 2024)")
             ax.legend()
             ax.grid(True, linestyle=":", alpha=0.4)
-
-            # improve x-axis formatting (show year only)
-            ax.xaxis.set_major_locator(plt.MaxNLocator(len(list(hist_idx)) + len(forecast_idx)))
-            fig.autofmt_xdate()
             st.pyplot(fig, use_container_width=True)
 
-            # prepare forecast DataFrame to display (datetime index + values)
-            df_forecast = pd.DataFrame(
-                {"Forecast": forecast_values},
-                index=pd.DatetimeIndex(forecast_idx)
+            # Tabel ringkas prediksi
+            st.subheader("📅 Prediksi 5 Tahun (Mulai 2024)")
+            st.dataframe(
+                df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(2),
+                use_container_width=True
             )
-            # round values to 3 decimals like di Colab
-            df_forecast["Forecast"] = df_forecast["Forecast"].round(3)
 
-            st.markdown("Hasil Forecast 5 Tahun ke Depan:")
-            # show as table with datetime index visible
-            st.dataframe(df_forecast)
+            # Catatan metode
+            st.caption(
+                "Metode: Regresi linear pada data historis sebelum 2024. "
+                "Jika data < 2 titik, prediksi datar memakai rata-rata historis. "
+                "Silakan sesuaikan metode bila diperlukan."
+            )
 
-            # also allow user to download forecast as csv
-            csv_bytes = df_forecast.to_csv().encode("utf-8")
-            st.download_button("Unduh Forecast (CSV)", data=csv_bytes, file_name="forecast_5y.csv", mime="text/csv")
-
-            # show model params for transparency
-            if len(X) >= 2:
-                st.caption(f"Model: regresi linear pada data historis (tahun < {start_forecast_year} apabila tersedia). Slope (m) = {m:.6f}, Intercept (b) = {b:.4f}.")
-            else:
-                st.caption("Model: fallback rata-rata (data historis kurang dari 2 titik).")
-
-
+    else:
+        st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
 
 
 
@@ -338,7 +347,7 @@ elif menu == "🔮 Prediksi Provinsi":
                 st.pyplot(fig_fi, use_container_width=True)
 
             st.markdown("---")
-            st.markdown("Masukkan nilai indikator untuk *Top-5 fitur* berikut (nilai default: median provinsi / median global):")
+            st.markdown("Masukkan nilai indikator untuk **Top-5 fitur** berikut (nilai default: median provinsi / median global):")
 
             # Render inputs only for top 5 features
             user_inputs = {}
@@ -358,7 +367,7 @@ elif menu == "🔮 Prediksi Provinsi":
             st.markdown("Jika beberapa fitur lain tidak tersedia, sistem akan mengisi otomatis dengan median (provinsi atau global).")
 
             if st.button("Prediksi (Provinsi)"):
-                # Build full feature vector in the same order as features
+                # Build full feature vector in the same order as `features`
                 input_vector = {}
                 for feat in features:
                     if feat in user_inputs:
@@ -386,7 +395,7 @@ elif menu == "🔮 Prediksi Provinsi":
                 # Predict
                 try:
                     pred = model.predict(input_scaled)[0]
-                    st.success(f"💧 Prediksi jumlah akses air bersih (provinsi{': ' + sel_prov if sel_prov else ''}): *{pred:.2f}*")
+                    st.success(f"💧 Prediksi jumlah akses air bersih (provinsi{': ' + sel_prov if sel_prov else ''}): **{pred:.2f}**")
                     # Show breakdown: show top-5 inputs and their importance as reference
                     st.subheader("Input (Top-5 Indikator) dan Nilai Default/Anda")
                     df_inputs_show = pd.DataFrame({
@@ -493,7 +502,7 @@ elif menu == "📊 Analisis Faktor":
                     # jika panjang cocok, pasangkan ke features
                     if len(fi) == len(features):
                         feature_importances = dict(zip(features, map(float, fi)))
-                        st.success("Menggunakan model.feature_importances_ dari model.")
+                        st.success("Menggunakan `model.feature_importances_` dari model.")
                     else:
                         # jika ukuran beda, coba pasangan sebagian dan beri peringatan
                         minlen = min(len(fi), len(features))
@@ -582,7 +591,7 @@ elif menu == "📊 Analisis Faktor":
                 suggestions = []
                 for i in range(top_n_for_suggest):
                     feat = df_top.iloc[i]["feature"]
-                    suggestions.append(f"- *{feat}* — pertimbangkan prioritas intervensi/monitoring pada variabel ini karena berdampak besar terhadap prediksi akses air bersih.")
+                    suggestions.append(f"- **{feat}** — pertimbangkan prioritas intervensi/monitoring pada variabel ini karena berdampak besar terhadap prediksi akses air bersih.")
 
                 st.markdown("\n".join(suggestions))
                 st.caption(
@@ -601,11 +610,11 @@ elif menu == "📊 Analisis Faktor":
 # ============================================================
 st.markdown("---")
 st.markdown("""
-Kesimpulan:
+*Kesimpulan:*
 Aplikasi ini membantu pemerintah dan masyarakat untuk:
 - Menganalisis tren ketersediaan air bersih di berbagai wilayah.  
 - Memprediksi dampak kebijakan terhadap akses air bersih.  
 - Menentukan faktor penting dalam pengelolaan sumber daya air.
 
-🧩 Semua langkah mendukung pencapaian SDG 6 - Air Bersih dan Sanitasi Layak.
+🧩 Semua langkah mendukung pencapaian *SDG 6 - Air Bersih dan Sanitasi Layak.*
 """)
