@@ -77,6 +77,7 @@ num_cols = df.select_dtypes(include='number').columns
 for col in num_cols:
     df[col] = df[col].fillna(df[col].median())
 
+
 # ============================================================
 # helpers: auto-detect columns (fuzzy) and cleaning numeric strings
 # ============================================================
@@ -108,7 +109,7 @@ def clean_numeric_series(ser):
     return pd.to_numeric(s, errors="coerce")
 
 # ============================================================
-# 4. PILIH MENU ANALISIS + manual mapping
+# 4. PILIH MENU ANALISIS + manuel mapping
 # ============================================================
 menu = st.sidebar.radio("Pilih Menu", ["📈 Tren Nasional", "🔮 Prediksi Provinsi", "📊 Analisis Faktor"])
 
@@ -160,69 +161,77 @@ if menu == "📈 Tren Nasional":
             except Exception:
                 pass
 
-          # --- Mulai REPLACE: buat df_year historis & df_forecast sesuai output Colab ---
-# Nilai historis 2019-2023 (diambil/didekati dari screenshot Colab)
-# Jika kamu punya nilai yang lebih presisi, ganti list ini dengan nilai aslimu.
-hist_years = [2019, 2020, 2021, 2022, 2023]
-hist_values = [
-    16.2459,  # 2019 (≈16.246)
-    16.3010,  # 2020 (≈16.301)
-    16.3338,  # 2021 (≈16.334)
-    16.3010,  # 2022 (≈16.301)
-    16.3960   # 2023 (≈16.396)
-]
+            # ====== REPLACE START: gunakan nilai historis & prediksi sesuai Colab screenshot ======
+            # Kita override df_year dengan nilai historis 2019-2023 seperti pada Colab screenshot,
+            # dan membuat df_forecast 2024-2028 sesuai tabel Colab.
+            # Jika kamu punya angka presisi yang lain, ganti list hist_values dan forecast_values.
 
-df_year = pd.DataFrame({year_col: hist_years, water_col: hist_values})
+            # Nilai historis 2019-2023 (diambil/didekati dari screenshot Colab)
+            hist_years = [2019, 2020, 2021, 2022, 2023]
+            hist_values = [
+                16.2459,  # 2019 (≈16.246)
+                16.3010,  # 2020 (≈16.301)
+                16.3338,  # 2021 (≈16.334)
+                16.3010,  # 2022 (≈16.301)
+                16.3960   # 2023 (≈16.396)
+            ]
+            df_year = pd.DataFrame({year_col: hist_years, water_col: hist_values})
 
-# Prediksi 5 tahun (mengikuti tabel di screenshot Colab)
-forecast_years = [2024, 2025, 2026, 2027, 2028]
-forecast_values = [
-    16.406,  # 2024
-    16.435,  # 2025
-    16.465,  # 2026
-    16.494,  # 2027
-    16.524   # 2028
-]
+            # Prediksi 5 tahun (mengikuti tabel di screenshot Colab)
+            forecast_years = [2024, 2025, 2026, 2027, 2028]
+            forecast_values = [
+                16.406,  # 2024
+                16.435,  # 2025
+                16.465,  # 2026
+                16.494,  # 2027
+                16.524   # 2028
+            ]
+            df_forecast = pd.DataFrame({year_col: forecast_years, water_col: forecast_values})
 
-df_forecast = pd.DataFrame({year_col: forecast_years, water_col: forecast_values})
+            # Gabung untuk visualisasi jika perlu
+            df_all = pd.concat([
+                df_year.assign(_type="Historis"),
+                df_forecast.assign(_type="Prediksi")
+            ], ignore_index=True)
 
-# Gabung untuk visualisasi jika perlu
-df_all = pd.concat([
-    df_year.assign(_type="Historis"),
-    df_forecast.assign(_type="Prediksi")
-], ignore_index=True)
+            # ----- Visualisasi dengan Matplotlib (mencocokkan gaya pada screenshot) -----
+            fig, ax = plt.subplots(figsize=(10, 5))
+            # Plot historis (2019-2023)
+            ax.plot(
+                df_year[year_col], df_year[water_col],
+                marker="o", linewidth=2, label="Aktual"
+            )
+            # Plot prediksi 2024-2028 (titik oranye putus-putus)
+            ax.plot(
+                df_forecast[year_col], df_forecast[water_col],
+                marker="o", linestyle="--", linewidth=2, label="Forecast", color="#ff9900"
+            )
+            ax.set_xlabel("Tahun")
+            ax.set_ylabel("Jumlah Air Bersih (rata-rata)")
+            ax.set_title("Prediksi Tren Jumlah Air Bersih (5 Tahun ke Depan)")
+            ax.legend()
+            ax.grid(True, linestyle=":", alpha=0.4)
+            st.pyplot(fig, use_container_width=True)
 
-# ----- Visualisasi dengan Matplotlib (mencocokkan gaya pada screenshot) -----
-fig, ax = plt.subplots(figsize=(10, 5))
-# Plot historis (2019-2023)
-ax.plot(
-    df_year[year_col], df_year[water_col],
-    marker="o", linewidth=2, label="Aktual"  # label 'Aktual' agar sama dengan legend di screenshot
-)
-# Plot prediksi 2024-2028 (titik oranye putus-putus)
-ax.plot(
-    df_forecast[year_col], df_forecast[water_col],
-    marker="o", linestyle="--", linewidth=2, label="Forecast", color="#ff9900"
-)
-ax.set_xlabel("Tahun")
-ax.set_ylabel("Jumlah Air Bersih (rata-rata)")
-ax.set_title("Prediksi Tren Jumlah Air Bersih (5 Tahun ke Depan)")
-ax.legend()
-ax.grid(True, linestyle=":", alpha=0.4)
-st.pyplot(fig, use_container_width=True)
+            # Tabel ringkas prediksi (sama seperti di screenshot)
+            st.subheader("📅 Hasil Forecast 5 Tahun ke Depan:")
+            st.dataframe(
+                df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(3),
+                use_container_width=True
+            )
+            # ====== REPLACE END ======
 
-# Tabel ringkas prediksi (sama seperti di screenshot)
-st.subheader("📅 Hasil Forecast 5 Tahun ke Depan:")
-st.dataframe(
-    df_forecast.rename(columns={year_col: "Tahun", water_col: "Prediksi_Air_Bersih"}).round(3),
-    use_container_width=True
-)
-
+            # Catatan metode
+            st.caption(
+                "Metode: nilai historis & prediksi ditentukan sesuai output Colab yang dilampirkan. "
+                "Jika ingin agar prediksi dihitung dari data historis di file CSV, kembalikan bagian polyfit/regresi."
+            )
 
     else:
         st.warning("Kolom 'tahun' dan/atau 'air_bersih' tidak ditemukan otomatis. Pilih kolom secara manual di sidebar.")
 
-# ============================================================
+
+
 # 6. PREDIKSI PROVINSI (dengan selector provinsi + top-5 fitur)
 # ============================================================
 elif menu == "🔮 Prediksi Provinsi":
@@ -404,6 +413,7 @@ elif menu == "🔮 Prediksi Provinsi":
                 except Exception as e:
                     st.error(f"Terjadi error saat prediksi: {e}")
 
+
 # ============================================================
 # 7. ANALISIS FAKTOR
 # ============================================================
@@ -487,15 +497,17 @@ elif menu == "📊 Analisis Faktor":
                         st.success("Menggunakan `model.feature_importances_` dari model.")
                     else:
                         # jika ukuran beda, coba pasangan sebagian dan beri peringatan
+                        minlen = min(len(fi), len(features))
                         feature_importances = {features[i]: float(fi[i]) if i < len(fi) else 0.0 for i in range(len(features))}
                         st.warning("Peringatan: panjang feature_importances_ tidak cocok dengan jumlah fitur — hasil bisa tidak akurat.")
                 else:
                     raise AttributeError("Tidak ada attribute feature_importances_")
-            except Exception:
+            except Exception as e:
                 st.info("Attribute feature_importances_ tidak tersedia atau gagal dibaca — mencoba Permutation Importance (lebih lambat).")
                 # 2) coba permutation importance (model-agnostik)
                 try:
                     from sklearn.inspection import permutation_importance
+                    # Jika ada scaler di proyek, coba muat (opsional)
                     scaler = None
                     scaler_path = "scaler.pkl"
                     if os.path.exists(scaler_path):
@@ -509,14 +521,17 @@ elif menu == "📊 Analisis Faktor":
                         try:
                             X_for_perm = pd.DataFrame(scaler.transform(X_for_perm), columns=X_for_perm.columns)
                         except Exception:
+                            # jika gagal scaling, pakai X_df asli
                             X_for_perm = X_df.copy()
 
+                    # ubah ke numpy
                     X_np = X_for_perm.values
                     y_np = y_ser.values
 
-                    # agar tidak berat, batasi sampel jika dataset besar
+                    # agar tidak berat, batasi sampel jika dataset sangat besar
                     max_samples = 1000
                     if len(y_np) > max_samples:
+                        # ambil sampel acak
                         samp_idx = np.random.RandomState(42).choice(len(y_np), size=max_samples, replace=False)
                         X_np_sample = X_np[samp_idx]
                         y_np_sample = y_np[samp_idx]
@@ -526,10 +541,12 @@ elif menu == "📊 Analisis Faktor":
 
                     perm = permutation_importance(model, X_np_sample, y_np_sample, n_repeats=10, random_state=42, n_jobs=-1)
                     imp_means = perm.importances_mean
+                    # pasangkan ke features (urut sesuai X_for_perm.columns)
                     feature_importances = dict(zip(X_for_perm.columns.tolist(), map(float, imp_means)))
                     st.success("Permutation importance selesai.")
                 except Exception as e_perm:
                     st.error(f"Gagal menghitung permutation importance: {e_perm}")
+                    # fallback: isi 0
                     feature_importances = {f: 0.0 for f in features}
 
             # Sort and prepare dataframe
@@ -543,7 +560,7 @@ elif menu == "📊 Analisis Faktor":
             st.write("Tabel fitur diurutkan berdasarkan skor importance (nilai yang lebih besar → pengaruh lebih kuat).")
             st.dataframe(df_top[["feature", "importance"]].style.format({"importance": "{:.6f}"}), use_container_width=True)
 
-            # Visual
+            # Visual: bar chart (matplotlib agar kontrol layout lebih baik)
             try:
                 fig, ax = plt.subplots(figsize=(8, max(3, 0.4 * top_k)))
                 ax.barh(df_top["feature"][::-1], df_top["importance"][::-1])
@@ -552,28 +569,33 @@ elif menu == "📊 Analisis Faktor":
                 plt.tight_layout()
                 st.pyplot(fig, use_container_width=True)
             except Exception:
+                # fallback: st.bar_chart
                 st.bar_chart(df_top.set_index("feature")["importance"])
 
-            # Rekomendasi singkat
+            # Rekomendasi singkat tindakan (automated hints)
             st.markdown("---")
             st.markdown("### Rekomendasi Singkat untuk Prioritas Pengelolaan")
             if df_top.shape[0] == 0:
                 st.info("Tidak ada fitur yang dapat dianalisis.")
             else:
+                # ambil 5 teratas untuk saran ringkas
                 top_n_for_suggest = min(5, df_top.shape[0])
                 suggestions = []
                 for i in range(top_n_for_suggest):
                     feat = df_top.iloc[i]["feature"]
                     suggestions.append(f"- **{feat}** — pertimbangkan prioritas intervensi/monitoring pada variabel ini karena berdampak besar terhadap prediksi akses air bersih.")
+
                 st.markdown("\n".join(suggestions))
                 st.caption(
                     "Catatan: rekomendasi di atas bersifat otomatis berdasarkan ranking importance. "
                     "Sebaiknya dikombinasikan dengan konteks lokal (ketersediaan anggaran, regulasi, kondisi hidrologi) sebelum pengambilan keputusan."
                 )
 
-            # Unduh hasil
+            # Opsional: unduh hasil feature importance
             csv_bytes = df_fi.to_csv(index=False).encode("utf-8")
             st.download_button("Unduh semua feature importances (CSV)", data=csv_bytes, file_name="feature_importances.csv", mime="text/csv")
+
+
 
 # ============================================================
 # 8. PENJELASAN AKHIR
